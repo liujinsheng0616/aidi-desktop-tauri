@@ -1449,6 +1449,19 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                // 移除 macOS Gatekeeper 隔离属性，避免"无法验证"弹窗
+                #[cfg(target_os = "macos")]
+                {
+                    if let Ok(exe_path) = std::env::current_exe() {
+                        // 从 Contents/MacOS/<binary> 向上三级得到 .app 包路径
+                        if let Some(app_bundle) = exe_path.ancestors().nth(3) {
+                            let _ = std::process::Command::new("xattr")
+                                .args(["-cr", &app_bundle.to_string_lossy()])
+                                .output();
+                        }
+                    }
+                }
+
                 // Position main window at right-center-bottom
                 if let Some(window) = app.webview_windows().get("main") {
                     // 禁用窗口阴影，避免灰色边框
