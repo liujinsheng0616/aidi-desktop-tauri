@@ -1,5 +1,5 @@
 import { createApp } from 'vue'
-import Menu from './components/Menu.vue'
+import MenuPanel from './components/MenuPanel.vue'
 import './style.css'
 
-createApp(Menu).mount('#app')
+createApp(MenuPanel).mount('#app')

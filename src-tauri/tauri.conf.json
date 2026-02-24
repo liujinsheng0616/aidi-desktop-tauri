@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "AIDI",
-        "width": 80,
-        "height": 80,
+        "width": 120,
+        "height": 120,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -24,28 +24,15 @@
         "center": false,
         "visible": false,
         "x": 100,
-        "y": 100
+        "y": 100,
+        "acceptFirstMouse": true
       },
       {
         "label": "menu",
         "title": "Menu",
         "url": "menu.html",
-        "width": 185,
-        "height": 110,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "center": false,
-        "visible": false
-      },
-      {
-        "label": "submenu",
-        "title": "Submenu",
-        "url": "submenu.html",
-        "width": 250,
-        "height": 310,
+        "width": 436,
+        "height": 116,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -62,10 +49,11 @@
         "height": 550,
         "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true,
+        "shadow": false,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "resizable": false,
-        "center": false,
+        "center": true,
         "visible": false
       }
     ],
@@ -83,6 +71,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": ["scripts/*"]
   }
 }

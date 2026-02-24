@@ -22,7 +22,6 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, "index.html"),
         menu: resolve(__dirname, "menu.html"),
-        submenu: resolve(__dirname, "submenu.html"),
         optimizer: resolve(__dirname, "optimizer.html"),
       },
     },

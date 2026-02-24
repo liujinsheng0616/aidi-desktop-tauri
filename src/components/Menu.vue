@@ -2,7 +2,6 @@
 import { onMounted, onUnmounted } from 'vue'
 import { ChevronRight, Palette, Zap } from 'lucide-vue-next'
 import { Card } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
@@ -28,9 +27,17 @@ function onAppearanceEnter() {
   invoke('show_submenu')
 }
 
-function onOptimizerClick() {
+function hideSubmenu() {
+  invoke('hide_submenu')
+}
+
+function onOptimizerClick(event: MouseEvent) {
+  event.stopPropagation()
+  console.log('Optimizer clicked!')
+  // 直接显示优化器窗口
   invoke('show_optimizer_window')
-  invoke('hide_menu_window')
+  // 隐藏菜单（使用 hide_menu 而不是 hide_menu_window，保持状态一致）
+  invoke('hide_menu')
 }
 
 function onMouseEnter() {
@@ -38,8 +45,8 @@ function onMouseEnter() {
 }
 
 function onMouseLeave() {
-  console.log('Menu mouse leave triggered!')
-  invoke('hide_menu_window')
+  // 通过后端状态机管理，而不是直接隐藏
+  invoke('menu_leave')
 }
 
 let unlisten: (() => void) | null = null
@@ -81,10 +88,9 @@ onUnmounted(() => {
           <ChevronRight :size="14" class="menu-arrow" />
         </button>
 
-        <Separator class="my-1" />
-
         <button
           class="menu-item group"
+          @mouseenter="hideSubmenu"
           @click="onOptimizerClick"
         >
           <span class="menu-icon">
@@ -120,14 +126,19 @@ onUnmounted(() => {
   border: none;
   background: transparent;
   text-align: left;
+  border-radius: 6px;
+  margin: 2px 4px;
+  width: calc(100% - 8px);
 }
 
 .menu-item:hover {
   background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .menu-item:active {
   background: color-mix(in oklch, var(--accent) 80%, transparent);
+  transform: scale(0.98);
 }
 
 .menu-icon {

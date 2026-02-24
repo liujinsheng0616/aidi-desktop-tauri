@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{Emitter, Manager, PhysicalPosition, LogicalPosition, Position, Size};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, Position, Size};
 
 // ==================== DATA STRUCTURES ====================
 
@@ -20,23 +20,23 @@ pub struct Settings {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BallPosition {
-    LeftTop,     // 屏幕左上1/3区域
-    LeftMiddle,  // 屏幕左中1/3区域
-    LeftBottom,  // 屏幕左下1/3区域
-    RightTop,    // 屏幕右上1/3区域
-    RightMiddle, // 屏幕右中1/3区域
-    RightBottom, // 屏幕右下1/3区域
-    TopCenter,   // 屏幕上中1/3区域
-    BottomCenter,// 屏幕下中1/3区域
-    Center,      // 屏幕中心区域
+    LeftTop,      // 屏幕左上1/3区域
+    LeftMiddle,   // 屏幕左中1/3区域
+    LeftBottom,   // 屏幕左下1/3区域
+    RightTop,     // 屏幕右上1/3区域
+    RightMiddle,  // 屏幕右中1/3区域
+    RightBottom,  // 屏幕右下1/3区域
+    TopCenter,    // 屏幕上中1/3区域
+    BottomCenter, // 屏幕下中1/3区域
+    Center,       // 屏幕中心区域
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuPosition {
-    Below,  // 菜单在球下方
-    Above,  // 菜单在球上方
-    Left,   // 菜单在球左侧
-    Right,  // 菜单在球右侧
+    Below, // 菜单在球下方
+    Above, // 菜单在球上方
+    Left,  // 菜单在球左侧
+    Right, // 菜单在球右侧
 }
 
 impl Default for MenuPosition {
@@ -64,12 +64,11 @@ impl Default for MenuAlignment {
 // ==================== INTERACTION STATE MACHINE ====================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]  // Dragging variant reserved for future use
+#[allow(dead_code)] // Dragging variant reserved for future use
 enum InteractionState {
     Idle,           // 空闲
     Hovering,       // 悬浮球 hover
     MenuShowing,    // 菜单显示中
-    SubmenuShowing, // 子菜单显示中
     HideDelaying,   // 等待隐藏
     Dragging,       // 拖拽中
     Animating,      // 动画中
@@ -81,31 +80,7 @@ impl Default for InteractionState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MenuDirection {
-    Right,   // 菜单向右展开（球在左边）
-    Left,    // 菜单向左展开（球在右边）
-    Bottom,  // 菜单向下展开（球在上边）
-    Top,     // 菜单向上展开（球在下边）
-}
 
-impl Default for MenuDirection {
-    fn default() -> Self {
-        MenuDirection::Right
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SubmenuDirection {
-    Right,  // 子菜单向右展开
-    Left,   // 子菜单向左展开
-}
-
-impl Default for SubmenuDirection {
-    fn default() -> Self {
-        SubmenuDirection::Right
-    }
-}
 
 // ==================== DOCK STATE ====================
 
@@ -114,8 +89,6 @@ struct DockState {
     is_docked: bool,
     dock_edge: Option<String>, // "left", "right", "top", "bottom"
     is_popped_out: bool,
-    menu_dir: MenuDirection,         // Menu expansion direction (4 directions)
-    submenu_dir: SubmenuDirection,   // Submenu expansion direction (left or right)
     hidden_x: i32,
     hidden_y: i32,
     pop_out_x: i32,
@@ -129,11 +102,10 @@ struct DockState {
     // hover 状态
     ball_hover: bool,
     menu_hover: bool,
-    submenu_hover: bool,
     // 新增：智能定位系统状态
-    ball_position: Option<BallPosition>,    // 悬浮球位置分类
-    menu_position: MenuPosition,            // 菜单位置策略
-    menu_alignment: MenuAlignment,          // 菜单对齐方式
+    ball_position: Option<BallPosition>, // 悬浮球位置分类
+    menu_position: MenuPosition,         // 菜单位置策略
+    menu_alignment: MenuAlignment,       // 菜单对齐方式
 }
 
 // Global state version counter for canceling stale operations
@@ -151,8 +123,6 @@ static DOCK_STATE: Mutex<DockState> = Mutex::new(DockState {
     is_docked: false,
     dock_edge: None,
     is_popped_out: false,
-    menu_dir: MenuDirection::Right,
-    submenu_dir: SubmenuDirection::Right,
     hidden_x: 0,
     hidden_y: 0,
     pop_out_x: 0,
@@ -163,7 +133,6 @@ static DOCK_STATE: Mutex<DockState> = Mutex::new(DockState {
     is_in_pop_protection: false,
     ball_hover: false,
     menu_hover: false,
-    submenu_hover: false,
     ball_position: None,
     menu_position: MenuPosition::Below,
     menu_alignment: MenuAlignment::LeftAlign,
@@ -173,17 +142,17 @@ static DOCK_STATE: Mutex<DockState> = Mutex::new(DockState {
 static HIDE_DOCK_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 static POP_PROTECTION_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 
-static BALL_SIZE: Mutex<u32> = Mutex::new(48);
-const BALL_PADDING: u32 = 16; // 外环需要 ballSize + 8，所以需要额外 8 + 边距
-const EDGE_THRESHOLD: i32 = 20;  // Edge detection threshold
-const DOCK_VISIBLE_RATIO: f32 = 0.5;  // 50% of ball visible when docked
+static BALL_SIZE: Mutex<u32> = Mutex::new(60);
+const BALL_PADDING: u32 = 4; // 外环需要 ballSize + 8，窗口尺寸 = ballSize + BALL_PADDING * 2
+const EDGE_THRESHOLD: i32 = 15; // Edge detection threshold (reduced for better UX)
+const DOCK_VISIBLE_AMOUNT: i32 = 35; // Fixed visible amount when docked (pixels)
 
 // Animation constants
 const ANIMATION_FRAMES: u32 = 12;
 #[cfg(target_os = "windows")]
-const ANIMATION_FRAME_MS: u64 = 33;  // ~30fps on Windows
+const ANIMATION_FRAME_MS: u64 = 33; // ~30fps on Windows
 #[cfg(not(target_os = "windows"))]
-const ANIMATION_FRAME_MS: u64 = 16;  // ~60fps on other platforms
+const ANIMATION_FRAME_MS: u64 = 16; // ~60fps on other platforms
 
 // Platform-specific delays
 #[cfg(target_os = "windows")]
@@ -263,7 +232,6 @@ fn detect_ball_position(
         return BallPosition::Center;
     }
 
-
     // 水平位置判断 - 调整阈值使边缘检测更敏感
     let horizontal_zone = if center_x < screen_width / 4 {
         0 // 左侧 (左1/4)
@@ -272,7 +240,6 @@ fn detect_ball_position(
     } else {
         1 // 中间
     };
-
 
     // 垂直位置判断（考虑macOS菜单栏）
     let effective_center_y = center_y - MENUBAR_HEIGHT;
@@ -308,8 +275,8 @@ fn detect_ball_position(
     }
 }
 
-/// 根据子菜单空间需求计算最佳菜单定位策略（参考Electron版本逻辑）
-/// 返回 (菜单位置, 菜单对齐方式, 子菜单方向)
+/// 根据子菜单空间需求计算最佳菜单定位策略
+/// 返回 (菜单位置, 菜单对齐方式)
 fn calculate_menu_strategy(
     ball_x: i32,
     ball_y: i32,
@@ -319,22 +286,14 @@ fn calculate_menu_strategy(
     screen_height: i32,
     menu_height: i32,
     menu_gap: i32,
-) -> (MenuPosition, MenuAlignment, SubmenuDirection) {
+) -> (MenuPosition, MenuAlignment) {
     let submenu_width = 250; // 子菜单宽度
 
     // 计算子菜单展示空间需求
     let right_available = screen_width - (ball_x + ball_width + menu_gap);
-    let _left_available = ball_x + menu_gap;
 
-    // 根据子菜单空间决定展示方向
-    let submenu_direction = if right_available >= submenu_width {
-        SubmenuDirection::Right
-    } else {
-        SubmenuDirection::Left
-    };
-
-    // 根据子菜单方向决定菜单对齐方式
-    let menu_alignment = if submenu_direction == SubmenuDirection::Right {
+    // 根据子菜单空间决定菜单对齐方式
+    let menu_alignment = if right_available >= submenu_width {
         // 右边空间够，菜单左对齐球体（子菜单向右展开）
         MenuAlignment::LeftAlign
     } else {
@@ -342,19 +301,26 @@ fn calculate_menu_strategy(
         MenuAlignment::RightAlign
     };
 
-    // 垂直方向：优先在球体下方显示，空间不足时向上
-    let bottom_space = screen_height - (ball_y + ball_height + menu_gap);
-    let top_space = ball_y - menu_gap;
+    // 垂直方向：检查球下方是否有足够空间显示菜单
+    let space_below = screen_height - (ball_y + ball_height + menu_gap);
+    let space_above = ball_y - MENUBAR_HEIGHT - menu_gap;
 
-    let menu_position = if bottom_space >= menu_height {
+    let menu_position = if space_below >= menu_height {
+        // 下方空间足够，在球下方显示
         MenuPosition::Below
-    } else if top_space >= menu_height {
+    } else if space_above >= menu_height {
+        // 上方空间足够，在球上方显示
         MenuPosition::Above
     } else {
-        MenuPosition::Below // 默认下方，即使空间不足
+        // 两边空间都不够，选择空间较大的一方
+        if space_below >= space_above {
+            MenuPosition::Below
+        } else {
+            MenuPosition::Above
+        }
     };
 
-    (menu_position, menu_alignment, submenu_direction)
+    (menu_position, menu_alignment)
 }
 
 /// 计算菜单的具体位置坐标
@@ -384,29 +350,29 @@ fn calculate_menu_position(
     match position {
         MenuPosition::Below => {
             menu_y = ball_y + ball_height + gap;
-        },
+        }
         MenuPosition::Above => {
             menu_y = ball_y - menu_height - gap;
-        },
+        }
         MenuPosition::Right => {
             menu_x = ball_x + ball_width + gap;
-        },
+        }
         MenuPosition::Left => {
             menu_x = ball_x - menu_width - gap;
-        },
+        }
     }
 
     // 根据对齐方式调整位置
     match alignment {
         MenuAlignment::LeftAlign => {
             // 菜单左边缘与球左边缘对齐 - 已经是默认行为
-        },
+        }
         MenuAlignment::RightAlign => {
             // 菜单右边缘与球右边缘对齐
             if position == MenuPosition::Below || position == MenuPosition::Above {
                 menu_x = ball_x + ball_width - menu_width;
             }
-        },
+        }
         MenuAlignment::CenterAlign => {
             // 菜单中心与球中心对齐
             if position == MenuPosition::Below || position == MenuPosition::Above {
@@ -414,24 +380,26 @@ fn calculate_menu_position(
             } else {
                 menu_y = ball_y + (ball_height - menu_height) / 2;
             }
-        },
+        }
         MenuAlignment::TopAlign => {
             // 菜单顶部与球顶部对齐
             if position == MenuPosition::Right || position == MenuPosition::Left {
                 menu_y = ball_y;
             }
-        },
+        }
         MenuAlignment::BottomAlign => {
             // 菜单底部与球底部对齐
             if position == MenuPosition::Right || position == MenuPosition::Left {
                 menu_y = ball_y + ball_height - menu_height;
             }
-        },
+        }
     }
 
     // 边界检查：确保菜单不超出屏幕边界
     // 对于右对齐，优先保持右对齐效果
-    if alignment == MenuAlignment::RightAlign && (position == MenuPosition::Below || position == MenuPosition::Above) {
+    if alignment == MenuAlignment::RightAlign
+        && (position == MenuPosition::Below || position == MenuPosition::Above)
+    {
         // 右对齐时，确保菜单右边缘不超出屏幕
         if menu_x + menu_width > screen_width {
             menu_x = screen_width - menu_width;
@@ -456,39 +424,6 @@ fn calculate_menu_position(
     }
 
     (menu_x, menu_y)
-}
-
-/// 计算子菜单的具体位置坐标
-/// 根据一级菜单位置和子菜单展开方向计算最终坐标
-fn calculate_submenu_position(
-    menu_x: i32,
-    menu_y: i32,
-    menu_width: i32,
-    submenu_width: i32,
-    submenu_height: i32,
-    screen_width: i32,
-    screen_height: i32,
-    submenu_direction: SubmenuDirection,
-    padding_overlap: i32,
-) -> (i32, i32) {
-    let (sub_x, sub_y) = match submenu_direction {
-        SubmenuDirection::Right => {
-            let x = menu_x + menu_width - padding_overlap;
-            let y = menu_y;
-            (x, y)
-        },
-        SubmenuDirection::Left => {
-            let x = menu_x - submenu_width + padding_overlap;
-            let y = menu_y;
-            (x, y)
-        },
-    };
-
-    // 确保子菜单在屏幕边界内
-    let final_x = sub_x.max(0).min(screen_width - submenu_width);
-    let final_y = sub_y.max(MENUBAR_HEIGHT).min(screen_height - submenu_height);
-
-    (final_x, final_y)
 }
 
 // ==================== WINDOW MANAGEMENT ====================
@@ -518,23 +453,26 @@ fn hide_menu_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn show_submenu_window(app: tauri::AppHandle) {
-    if let Some(submenu_window) = app.webview_windows().get("submenu") {
-        let _ = submenu_window.show();
-    }
-}
-
-#[tauri::command]
-fn hide_submenu_window(app: tauri::AppHandle) {
-    if let Some(submenu_window) = app.webview_windows().get("submenu") {
-        let _ = submenu_window.hide();
-    }
-}
-
-#[tauri::command]
 fn show_optimizer_window(app: tauri::AppHandle) {
-    if let Some(optimizer_window) = app.webview_windows().get("optimizer") {
+    // 先隐藏菜单（与 Electron 版本一致）
+    let windows = app.webview_windows();
+    if let Some(menu_window) = windows.get("menu") {
+        let _ = menu_window.emit("menu-hidden", ());
+        let _ = menu_window.hide();
+    }
+
+    // 重置 hover 状态
+    {
+        let mut state = DOCK_STATE.lock().unwrap();
+        state.menu_hover = false;
+        state.ball_hover = false;
+        state.interaction_state = InteractionState::Idle;
+    }
+
+    // 显示 optimizer 窗口
+    if let Some(optimizer_window) = windows.get("optimizer") {
         let _ = optimizer_window.show();
+        let _ = optimizer_window.set_focus();
     }
 }
 
@@ -553,6 +491,36 @@ fn open_panel(app: tauri::AppHandle) {
 }
 
 // ==================== BALL INTERACTION ====================
+
+/// 拖拽开始前准备：只更新状态，不移动窗口
+/// 使用自定义拖拽逻辑时，不需要移动窗口到 pop_out 位置
+#[tauri::command]
+fn prepare_drag(_app: tauri::AppHandle) {
+    // 取消所有定时器
+    next_state_version();
+    {
+        let mut timer = HIDE_DOCK_TIMER.lock().unwrap();
+        let _ = timer.take();
+    }
+    {
+        let mut timer = POP_PROTECTION_TIMER.lock().unwrap();
+        let _ = timer.take();
+    }
+    {
+        let mut timer = MENU_HIDE_TIMER.lock().unwrap();
+        let _ = timer.take();
+    }
+
+    // 更新状态，但不重置 is_docked（让 drag_end 处理）
+    {
+        let mut state = DOCK_STATE.lock().unwrap();
+        state.ball_hover = true;
+        state.interaction_state = InteractionState::Dragging;
+        // 不要设置 is_docked = false，让 drag_end 来决定
+        // 只重置 popped_out 状态，因为拖拽开始时球已经弹出了
+        state.is_popped_out = false;
+    }
+}
 
 #[tauri::command]
 fn ball_enter(app: tauri::AppHandle) {
@@ -574,7 +542,13 @@ fn ball_enter(app: tauri::AppHandle) {
         if state.is_docked && !state.is_popped_out {
             state.is_popped_out = true;
             state.is_in_pop_protection = true;
-            (true, state.hidden_x, state.hidden_y, state.pop_out_x, state.pop_out_y)
+            (
+                true,
+                state.hidden_x,
+                state.hidden_y,
+                state.pop_out_x,
+                state.pop_out_y,
+            )
         } else {
             (false, 0, 0, 0, 0)
         }
@@ -585,7 +559,14 @@ fn ball_enter(app: tauri::AppHandle) {
         let app_handle = app.clone();
         std::thread::spawn(move || {
             if let Some(main_window) = app_handle.webview_windows().get("main") {
-                animate_to_position(&main_window, hidden_x, hidden_y, pop_out_x, pop_out_y, version);
+                animate_to_position(
+                    &main_window,
+                    hidden_x,
+                    hidden_y,
+                    pop_out_x,
+                    pop_out_y,
+                    version,
+                );
             }
         });
 
@@ -599,8 +580,15 @@ fn ball_enter(app: tauri::AppHandle) {
                 let mut state = DOCK_STATE.lock().unwrap();
                 state.is_in_pop_protection = false;
 
-                if state.is_docked && !state.ball_hover && !state.menu_hover && !state.submenu_hover {
-                    (true, state.hidden_x, state.hidden_y, state.pop_out_x, state.pop_out_y)
+                if state.is_docked && !state.ball_hover && !state.menu_hover
+                {
+                    (
+                        true,
+                        state.hidden_x,
+                        state.hidden_y,
+                        state.pop_out_x,
+                        state.pop_out_y,
+                    )
                 } else {
                     (false, 0, 0, 0, 0)
                 }
@@ -609,7 +597,14 @@ fn ball_enter(app: tauri::AppHandle) {
             if should_hide {
                 let hide_version = next_state_version();
                 if let Some(main_window) = app_handle.webview_windows().get("main") {
-                    animate_to_position(&main_window, pop_x, pop_y, hidden_x, hidden_y, hide_version);
+                    animate_to_position(
+                        &main_window,
+                        pop_x,
+                        pop_y,
+                        hidden_x,
+                        hidden_y,
+                        hide_version,
+                    );
                 }
 
                 let mut state = DOCK_STATE.lock().unwrap();
@@ -646,18 +641,16 @@ fn ball_leave(app: tauri::AppHandle) {
 
         let should_hide_menu = {
             let state = DOCK_STATE.lock().unwrap();
-            // 如果鼠标不在球、菜单或子菜单上，则隐藏菜单
-            !state.ball_hover && !state.menu_hover && !state.submenu_hover
+            // 如果鼠标不在球或菜单上，则隐藏菜单
+            !state.ball_hover && !state.menu_hover
         };
 
         if should_hide_menu {
-            // 隐藏所有菜单窗口
+            // 隐藏菜单窗口
             let windows = app_handle.webview_windows();
             if let Some(menu_window) = windows.get("menu") {
+                let _ = menu_window.emit("menu-hidden", ());
                 let _ = menu_window.hide();
-            }
-            if let Some(submenu_window) = windows.get("submenu") {
-                let _ = submenu_window.hide();
             }
         }
     });
@@ -684,10 +677,19 @@ fn ball_leave(app: tauri::AppHandle) {
             let (should_hide, hidden_x, hidden_y, pop_x, pop_y) = {
                 let state = DOCK_STATE.lock().unwrap();
                 // Don't hide if in pop protection period or any hover state
-                if state.is_in_pop_protection || state.ball_hover || state.menu_hover || state.submenu_hover {
+                if state.is_in_pop_protection
+                    || state.ball_hover
+                    || state.menu_hover
+                {
                     (false, 0, 0, 0, 0)
                 } else if state.is_docked {
-                    (true, state.hidden_x, state.hidden_y, state.pop_out_x, state.pop_out_y)
+                    (
+                        true,
+                        state.hidden_x,
+                        state.hidden_y,
+                        state.pop_out_x,
+                        state.pop_out_y,
+                    )
                 } else {
                     (false, 0, 0, 0, 0)
                 }
@@ -748,29 +750,15 @@ fn menu_leave(app: tauri::AppHandle) {
         state.menu_hover = false;
     }
 
-    // 延迟重置 menu_hover，给子菜单进入的时间
+    // 延迟检查是否需要隐藏菜单
     let app_handle = app.clone();
     let handle = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
-
-        // 检查是否在子菜单中
-        let should_reset_menu_hover = {
-            let state = DOCK_STATE.lock().unwrap();
-            !state.submenu_hover
-        };
-
-        if should_reset_menu_hover {
-            let mut state = DOCK_STATE.lock().unwrap();
-            state.menu_hover = false;
-        }
-
-        // 再等待一段时间后检查是否需要隐藏
-        std::thread::sleep(Duration::from_millis(MENU_HIDE_DELAY_MS - 50));
+        std::thread::sleep(Duration::from_millis(MENU_HIDE_DELAY_MS));
 
         let should_hide = {
             let state = DOCK_STATE.lock().unwrap();
             // 只有当没有任何 hover 状态时才隐藏
-            !state.menu_hover && !state.submenu_hover && !state.ball_hover
+            !state.menu_hover && !state.ball_hover
         };
 
         if should_hide {
@@ -783,91 +771,9 @@ fn menu_leave(app: tauri::AppHandle) {
             // 隐藏菜单窗口
             let windows = app_handle.webview_windows();
             if let Some(menu_window) = windows.get("menu") {
+                let _ = menu_window.emit("menu-hidden", ());
                 let _ = menu_window.hide();
             }
-            if let Some(submenu_window) = windows.get("submenu") {
-                let _ = submenu_window.hide();
-            }
-        }
-    });
-
-    let mut timer = MENU_HIDE_TIMER.lock().unwrap();
-    *timer = Some(handle);
-}
-
-#[tauri::command]
-fn submenu_enter(app: tauri::AppHandle) {
-    let _ = app.emit("submenu-enter", ());
-
-    // Cancel any pending hide operations
-    let _ = next_state_version();
-    {
-        let mut timer = HIDE_DOCK_TIMER.lock().unwrap();
-        let _ = timer.take();
-    }
-    {
-        let mut timer = MENU_HIDE_TIMER.lock().unwrap();
-        let _ = timer.take();
-    }
-
-    // Update hover state
-    {
-        let mut state = DOCK_STATE.lock().unwrap();
-        state.submenu_hover = true;
-        state.menu_hover = true; // Keep menu hover state
-        state.interaction_state = InteractionState::SubmenuShowing;
-    }
-}
-
-#[tauri::command]
-fn submenu_leave(app: tauri::AppHandle) {
-    let _ = app.emit("submenu-leave", ());
-
-    let version = current_state_version();
-
-    // 立即更新 submenu_hover 状态
-    {
-        let mut state = DOCK_STATE.lock().unwrap();
-        state.submenu_hover = false;
-    }
-
-    // Delayed check to prevent flicker when moving back to menu
-    let app_handle = app.clone();
-    let handle = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(MENU_HIDE_DELAY_MS));
-
-        // Check if state version changed
-        if current_state_version() != version {
-            return;
-        }
-
-        let should_hide_all = {
-            let state = DOCK_STATE.lock().unwrap();
-            // Hide all menus if not hovering menu or ball
-            !state.menu_hover && !state.ball_hover
-        };
-
-        {
-            let mut state = DOCK_STATE.lock().unwrap();
-            state.submenu_hover = false;
-            if state.interaction_state == InteractionState::SubmenuShowing {
-                state.interaction_state = InteractionState::MenuShowing;
-            }
-        }
-
-        if should_hide_all {
-            // Hide all menu windows
-            let windows = app_handle.webview_windows();
-            if let Some(menu_window) = windows.get("menu") {
-                let _ = menu_window.hide();
-            }
-            if let Some(submenu_window) = windows.get("submenu") {
-                let _ = submenu_window.hide();
-            }
-
-            let mut state = DOCK_STATE.lock().unwrap();
-            state.menu_hover = false;
-            state.interaction_state = InteractionState::HideDelaying;
         }
     });
 
@@ -905,12 +811,20 @@ fn move_window_by(window: tauri::Window, dx: i32, dy: i32) {
 #[tauri::command]
 fn drag_end(app: tauri::AppHandle) {
     let windows = app.webview_windows();
-    let Some(main_window) = windows.get("main") else { return };
-    let Ok(pos) = main_window.outer_position() else { return };
-    let Ok(size) = main_window.outer_size() else { return };
+    let Some(main_window) = windows.get("main") else {
+        return;
+    };
+    let Ok(pos) = main_window.outer_position() else {
+        return;
+    };
+    let Ok(size) = main_window.outer_size() else {
+        return;
+    };
 
     // Get screen info
-    let Some(monitor) = main_window.current_monitor().ok().flatten() else { return };
+    let Some(monitor) = main_window.current_monitor().ok().flatten() else {
+        return;
+    };
     let screen_size = monitor.size();
     let screen_width = screen_size.width as i32;
     let screen_height = screen_size.height as i32;
@@ -919,10 +833,7 @@ fn drag_end(app: tauri::AppHandle) {
     let window_height = size.height as i32;
 
     // Calculate actual ball center position (considering BALL_PADDING)
-    let ball_center_x = pos.x + window_width / 2;
-
-    // Calculate ball size (window size minus padding)
-    let ball_size = *BALL_SIZE.lock().unwrap() as i32;
+    let _ball_center_x = pos.x + window_width / 2;
 
     // Edge detection with priority: left/right first, then top/bottom
     let at_left = pos.x < EDGE_THRESHOLD;
@@ -948,9 +859,8 @@ fn drag_end(app: tauri::AppHandle) {
     if let Some(edge) = edge {
         let pop_offset = 5;
 
-        // Calculate how much to hide based on DOCK_VISIBLE_RATIO
-        // We want DOCK_VISIBLE_RATIO of the ball to remain visible
-        let visible_amount = (ball_size as f32 * DOCK_VISIBLE_RATIO) as i32;
+        // Use fixed visible amount for consistent UX
+        let visible_amount = DOCK_VISIBLE_AMOUNT;
         let hide_amount = window_width / 2 - visible_amount / 2;
 
         state.is_docked = true;
@@ -972,9 +882,6 @@ fn drag_end(app: tauri::AppHandle) {
                 state.hidden_y = clamped_y;
                 state.pop_out_x = pop_offset;
                 state.pop_out_y = clamped_y;
-                // 球在左边 → 菜单向右展开
-                state.menu_dir = MenuDirection::Right;
-                state.submenu_dir = SubmenuDirection::Right;
             }
             "right" => {
                 // Hide to right, show DOCK_VISIBLE_RATIO of ball
@@ -982,9 +889,6 @@ fn drag_end(app: tauri::AppHandle) {
                 state.hidden_y = clamped_y;
                 state.pop_out_x = screen_width - window_width - pop_offset;
                 state.pop_out_y = clamped_y;
-                // 球在右边 → 菜单向左展开
-                state.menu_dir = MenuDirection::Left;
-                state.submenu_dir = SubmenuDirection::Left;
             }
             "top" => {
                 // Hide to top, show DOCK_VISIBLE_RATIO of ball
@@ -993,14 +897,6 @@ fn drag_end(app: tauri::AppHandle) {
                 state.hidden_y = MENUBAR_HEIGHT - top_hide_amount;
                 state.pop_out_x = clamped_x;
                 state.pop_out_y = MENUBAR_HEIGHT + pop_offset;
-                // 球在上边 → 菜单向下展开
-                state.menu_dir = MenuDirection::Bottom;
-                // 子菜单方向根据水平位置决定
-                state.submenu_dir = if ball_center_x > screen_width / 2 {
-                    SubmenuDirection::Left
-                } else {
-                    SubmenuDirection::Right
-                };
             }
             "bottom" => {
                 // Hide to bottom, show DOCK_VISIBLE_RATIO of ball
@@ -1009,14 +905,6 @@ fn drag_end(app: tauri::AppHandle) {
                 state.hidden_y = screen_height - window_height + bottom_hide_amount;
                 state.pop_out_x = clamped_x;
                 state.pop_out_y = screen_height - window_height - pop_offset;
-                // 球在下边 → 菜单向上展开
-                state.menu_dir = MenuDirection::Top;
-                // 子菜单方向根据水平位置决定
-                state.submenu_dir = if ball_center_x > screen_width / 2 {
-                    SubmenuDirection::Left
-                } else {
-                    SubmenuDirection::Right
-                };
             }
             _ => {}
         }
@@ -1031,7 +919,14 @@ fn drag_end(app: tauri::AppHandle) {
         // Animate to hidden position
         let main_window_clone = main_window.clone();
         std::thread::spawn(move || {
-            animate_to_position(&main_window_clone, pos.x, pos.y, hidden_x, hidden_y, version);
+            animate_to_position(
+                &main_window_clone,
+                pos.x,
+                pos.y,
+                hidden_x,
+                hidden_y,
+                version,
+            );
 
             // Update state after animation
             let mut state = DOCK_STATE.lock().unwrap();
@@ -1066,10 +961,17 @@ fn hide_docked_ball(app: tauri::AppHandle) {
             return;
         }
         // Don't hide if any hover state is active
-        if state.ball_hover || state.menu_hover || state.submenu_hover || state.is_in_pop_protection {
+        if state.ball_hover || state.menu_hover || state.is_in_pop_protection
+        {
             return;
         }
-        (true, state.hidden_x, state.hidden_y, state.pop_out_x, state.pop_out_y)
+        (
+            true,
+            state.hidden_x,
+            state.hidden_y,
+            state.pop_out_x,
+            state.pop_out_y,
+        )
     };
 
     if should_hide {
@@ -1078,7 +980,14 @@ fn hide_docked_ball(app: tauri::AppHandle) {
             // Use animation in a separate thread to avoid blocking
             let main_window_clone = main_window.clone();
             std::thread::spawn(move || {
-                animate_to_position(&main_window_clone, pop_x, pop_y, hidden_x, hidden_y, version);
+                animate_to_position(
+                    &main_window_clone,
+                    pop_x,
+                    pop_y,
+                    hidden_x,
+                    hidden_y,
+                    version,
+                );
 
                 let mut state = DOCK_STATE.lock().unwrap();
                 if state.is_docked {
@@ -1091,19 +1000,59 @@ fn hide_docked_ball(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn set_window_position(window: tauri::Window, x: i32, y: i32) {
-    let _ = window.set_position(Position::Physical(PhysicalPosition { x, y }));
+fn set_window_position(app: AppHandle, x: i32, y: i32) {
+    // 直接更新球窗口位置，不做额外的菜单同步（拖拽时菜单已隐藏）
+    if let Some(window) = app.webview_windows().get("main") {
+        let _ = window.set_position(Position::Physical(PhysicalPosition { x, y }));
+    }
+}
+
+#[tauri::command]
+fn get_window_position(window: tauri::Window) -> (i32, i32) {
+    if let Ok(pos) = window.outer_position() {
+        (pos.x, pos.y)
+    } else {
+        (0, 0)
+    }
 }
 
 #[tauri::command]
 fn show_menu(app: tauri::AppHandle) {
-    let windows = app.webview_windows();
-    let Some(main_window) = windows.get("main") else { return };
-    let Some(menu_window) = windows.get("menu") else { return };
+    // 1. 先更新状态，保护球不被隐藏
+    {
+        let mut state = DOCK_STATE.lock().unwrap();
+        state.menu_hover = true;  // 设置菜单 hover 状态，防止球被隐藏
+        state.interaction_state = InteractionState::MenuShowing;
+    }
 
-    let Ok(ball_pos) = main_window.outer_position() else { return };
-    let Ok(ball_size) = main_window.outer_size() else { return };
-    let Some(monitor) = main_window.current_monitor().ok().flatten() else { return };
+    // 2. 取消可能导致隐藏的定时器（不要调用 next_state_version()，那会取消弹出动画）
+    {
+        let mut timer = HIDE_DOCK_TIMER.lock().unwrap();
+        let _ = timer.take();
+    }
+    {
+        let mut timer = POP_PROTECTION_TIMER.lock().unwrap();
+        let _ = timer.take();
+    }
+    {
+        let mut timer = MENU_HIDE_TIMER.lock().unwrap();
+        let _ = timer.take();
+    }
+
+    let windows = app.webview_windows();
+    let Some(main_window) = windows.get("main") else {
+        return;
+    };
+    let Some(menu_window) = windows.get("menu") else {
+        return;
+    };
+
+    let Ok(ball_size) = main_window.outer_size() else {
+        return;
+    };
+    let Some(monitor) = main_window.current_monitor().ok().flatten() else {
+        return;
+    };
 
     let screen_size = monitor.size();
     let scale_factor = monitor.scale_factor();
@@ -1112,38 +1061,28 @@ fn show_menu(app: tauri::AppHandle) {
     let screen_width = (screen_size.width as f64 / scale_factor) as i32;
     let screen_height = (screen_size.height as f64 / scale_factor) as i32;
 
-    // DEBUG: 打印屏幕和监视器信息
-    println!("DEBUG: Physical monitor size: {}x{}", screen_size.width, screen_size.height);
-    println!("DEBUG: Logical screen size: {}x{}", screen_width, screen_height);
-    println!("DEBUG: Monitor scale factor: {}", scale_factor);
-    let monitor_pos = monitor.position();
-    println!("DEBUG: Monitor position: ({}, {})", monitor_pos.x, monitor_pos.y);
-
-    // Menu dimensions in logical pixels (these are CSS pixels, already logical)
-    let menu_width: i32 = 185;
-    let menu_height: i32 = 110;
-    let menu_gap: i32 = 0;
-
-    // 1. 获取实际的悬浮球位置（如果吸附弹出了，用 pop_out 位置）
-    let (ball_x_physical, ball_y_physical) = {
-        let state = DOCK_STATE.lock().unwrap();
-        if state.is_docked && state.is_popped_out {
-            println!("DEBUG: Using pop_out position (physical): ({}, {})", state.pop_out_x, state.pop_out_y);
-            (state.pop_out_x, state.pop_out_y)
-        } else {
-            println!("DEBUG: Using ball window position (physical): ({}, {})", ball_pos.x, ball_pos.y);
-            (ball_pos.x, ball_pos.y)
-        }
+    // 获取菜单窗口的实际尺寸
+    let Ok(menu_size) = menu_window.outer_size() else {
+        return;
     };
+    let menu_width = (menu_size.width as f64 / scale_factor) as i32;
+    // 使用主菜单的实际高度（约100px），而不是窗口高度（380px）
+    // 因为菜单位置计算应该基于主菜单，而不是整个窗口
+    let main_menu_height: i32 = 100;
+    let menu_gap: i32 = 8; // 球和菜单之间的间距
 
-    // Convert ball position to logical pixels
-    let ball_x = (ball_x_physical as f64 / scale_factor) as i32;
-    let ball_y = (ball_y_physical as f64 / scale_factor) as i32;
+    // 获取球的位置（直接使用窗口实际位置）
+    let Ok(ball_pos) = main_window.outer_position() else {
+        return;
+    };
     let ball_full_width = (ball_size.width as f64 / scale_factor) as i32;
     let ball_full_height = (ball_size.height as f64 / scale_factor) as i32;
+    let ball_x = (ball_pos.x as f64 / scale_factor) as i32;
+    let ball_y = (ball_pos.y as f64 / scale_factor) as i32;
 
-    println!("DEBUG: Ball logical position: ({}, {})", ball_x, ball_y);
-    println!("DEBUG: Ball logical size: {}x{}", ball_full_width, ball_full_height);
+    // Debug info
+    eprintln!("show_menu: scale_factor={}, ball_logical=({}, {}), ball_size=({}, {}), menu_size=({}, {})",
+        scale_factor, ball_x, ball_y, ball_full_width, ball_full_height, menu_width, main_menu_height);
 
     // 2. 检测悬浮球位置分类
     let ball_position = detect_ball_position(
@@ -1156,20 +1095,16 @@ fn show_menu(app: tauri::AppHandle) {
     );
 
     // 3. 计算菜单定位策略（采用Electron版本的智能逻辑）
-    let (menu_position, menu_alignment, submenu_direction) = calculate_menu_strategy(
+    let (menu_position, menu_alignment) = calculate_menu_strategy(
         ball_x,
         ball_y,
         ball_full_width,
         ball_full_height,
         screen_width,
         screen_height,
-        menu_height,
+        main_menu_height,
         menu_gap,
     );
-
-    println!("DEBUG: Ball position classification: {:?}", ball_position);
-    println!("DEBUG: Menu strategy - position: {:?}, alignment: {:?}, submenu: {:?}",
-             menu_position, menu_alignment, submenu_direction);
 
     // 4. 计算菜单具体位置
     let (final_x, final_y) = calculate_menu_position(
@@ -1178,7 +1113,7 @@ fn show_menu(app: tauri::AppHandle) {
         ball_full_width,
         ball_full_height,
         menu_width,
-        menu_height,
+        main_menu_height,
         screen_width,
         screen_height,
         menu_position,
@@ -1186,141 +1121,61 @@ fn show_menu(app: tauri::AppHandle) {
         menu_gap,
     );
 
-    println!("DEBUG: Calculated final position (logical pixels): ({}, {})", final_x, final_y);
+    // Debug: 打印最终菜单位置
+    eprintln!("show_menu: menu_position={:?}, menu_alignment={:?}, final=({}, {})",
+        menu_position, menu_alignment, final_x, final_y);
 
-
-    // 5. 保存策略信息到状态，供子菜单使用
+    // 5. 保存策略信息到状态
     {
         let mut state = DOCK_STATE.lock().unwrap();
         state.ball_position = Some(ball_position);
         state.menu_position = menu_position;
         state.menu_alignment = menu_alignment;
-        state.submenu_dir = submenu_direction;
     }
 
-    // 6. 设置菜单位置并显示
-    // 先隐藏窗口确保重置状态
-    let _ = menu_window.hide();
+    // 5.5 发送子菜单展开方向给前端
+    let submenu_direction = if menu_alignment == MenuAlignment::RightAlign {
+        "left"
+    } else {
+        "right"
+    };
+    let _ = menu_window.emit("submenu-direction", serde_json::json!({ "direction": submenu_direction }));
 
-    // 小延迟确保隐藏完成
+    // 6. 设置菜单窗口大小和位置，然后显示
+    let _ = menu_window.hide();
     std::thread::sleep(std::time::Duration::from_millis(1));
 
-    // 设置位置（使用逻辑像素坐标）
-    let position_result = menu_window.set_position(Position::Logical(LogicalPosition { x: final_x as f64, y: final_y as f64 }));
-    println!("DEBUG: set_position result: {:?}", position_result);
+    // 设置窗口大小为主菜单大小（436x116）
+    let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
+        width: 436.0,
+        height: 116.0,
+    }));
 
-    // 再次小延迟确保位置设置生效
+    let _ = menu_window.set_position(Position::Logical(LogicalPosition {
+        x: final_x as f64,
+        y: final_y as f64,
+    }));
     std::thread::sleep(std::time::Duration::from_millis(5));
 
-    // DEBUG: 验证窗口位置是否真的被设置了
-    if let Ok(actual_pos) = menu_window.outer_position() {
-        println!("DEBUG: Menu window position after set_position: ({}, {})", actual_pos.x, actual_pos.y);
-        println!("DEBUG: Expected vs Actual: ({}, {}) vs ({}, {})", final_x, final_y, actual_pos.x, actual_pos.y);
-    } else {
-        println!("DEBUG: Failed to get window position");
-    }
-
-    // 显示窗口
-    let show_result = menu_window.show();
-    println!("DEBUG: show result: {:?}", show_result);
-
-    // 最后再次验证位置
-    if let Ok(final_pos) = menu_window.outer_position() {
-        println!("DEBUG: Menu window position after show: ({}, {})", final_pos.x, final_pos.y);
-    }
+    let _ = menu_window.show();
 }
 
 #[tauri::command]
 fn hide_menu(app: tauri::AppHandle) {
+    // 重置所有 hover 状态
+    {
+        let mut state = DOCK_STATE.lock().unwrap();
+        state.menu_hover = false;
+        state.ball_hover = false;
+        state.interaction_state = InteractionState::Idle;
+    }
+
+    // 隐藏菜单窗口
     let windows = app.webview_windows();
     if let Some(menu_window) = windows.get("menu") {
+        // 发送菜单隐藏事件，让前端重置子菜单状态
+        let _ = menu_window.emit("menu-hidden", ());
         let _ = menu_window.hide();
-    }
-    if let Some(submenu_window) = windows.get("submenu") {
-        let _ = submenu_window.hide();
-    }
-}
-
-#[tauri::command]
-fn show_submenu(app: tauri::AppHandle) {
-    let windows = app.webview_windows();
-    let Some(menu_window) = windows.get("menu") else { return };
-    let Some(submenu_window) = windows.get("submenu") else { return };
-    let Some(main_window) = windows.get("main") else { return };
-
-    let Ok(menu_pos_physical) = menu_window.outer_position() else { return };
-    let Ok(menu_size_physical) = menu_window.outer_size() else { return };
-    let Some(monitor) = main_window.current_monitor().ok().flatten() else { return };
-
-    let screen_size = monitor.size();
-    let scale_factor = monitor.scale_factor();
-
-    // Convert to logical pixels for all calculations
-    let screen_width = (screen_size.width as f64 / scale_factor) as i32;
-    let screen_height = (screen_size.height as f64 / scale_factor) as i32;
-
-    // Convert menu position and size from physical to logical pixels
-    let menu_pos_x = (menu_pos_physical.x as f64 / scale_factor) as i32;
-    let menu_pos_y = (menu_pos_physical.y as f64 / scale_factor) as i32;
-    let menu_width = (menu_size_physical.width as f64 / scale_factor) as i32;
-    let menu_height = (menu_size_physical.height as f64 / scale_factor) as i32;
-
-    // Submenu dimensions in logical pixels (CSS pixels)
-    let submenu_width: i32 = 250;
-    let submenu_height: i32 = 310;
-
-    println!("DEBUG SUBMENU: Menu position (physical): ({}, {})", menu_pos_physical.x, menu_pos_physical.y);
-    println!("DEBUG SUBMENU: Menu position (logical): ({}, {})", menu_pos_x, menu_pos_y);
-    println!("DEBUG SUBMENU: Menu size (physical): {}x{}", menu_size_physical.width, menu_size_physical.height);
-    println!("DEBUG SUBMENU: Menu size (logical): {}x{}", menu_width, menu_height);
-    println!("DEBUG SUBMENU: Screen size (logical): {}x{}", screen_width, screen_height);
-
-    // 1. 读取保存的策略信息
-    let submenu_dir = {
-        let state = DOCK_STATE.lock().unwrap();
-        state.submenu_dir
-    };
-
-    println!("DEBUG SUBMENU: Submenu direction strategy: {:?}", submenu_dir);
-
-    // 菜单和子菜单都有 4px 的 wrapper padding
-    // 重叠 padding 实现无缝衔接
-    let padding_overlap = 8;
-
-    // 2. 使用精确的子菜单定位算法
-    let (final_x, final_y) = calculate_submenu_position(
-        menu_pos_x,
-        menu_pos_y,
-        menu_width,
-        submenu_width,
-        submenu_height,
-        screen_width,
-        screen_height,
-        submenu_dir,
-        padding_overlap,
-    );
-
-    println!("DEBUG SUBMENU: Calculated final position (logical): ({}, {})", final_x, final_y);
-
-    // 3. 设置子菜单位置并显示（使用逻辑像素坐标）
-    let position_result = submenu_window.set_position(Position::Logical(LogicalPosition { x: final_x as f64, y: final_y as f64 }));
-    println!("DEBUG SUBMENU: set_position result: {:?}", position_result);
-
-    let show_result = submenu_window.show();
-    println!("DEBUG SUBMENU: show result: {:?}", show_result);
-
-    // 验证最终位置
-    if let Ok(actual_pos) = submenu_window.outer_position() {
-        println!("DEBUG SUBMENU: Actual window position: ({}, {})", actual_pos.x, actual_pos.y);
-        println!("DEBUG SUBMENU: Expected vs Actual: ({}, {}) vs ({}, {})", final_x, final_y, actual_pos.x, actual_pos.y);
-    }
-}
-
-#[tauri::command]
-fn hide_submenu(app: tauri::AppHandle) {
-    let windows = app.webview_windows();
-    if let Some(submenu_window) = windows.get("submenu") {
-        let _ = submenu_window.hide();
     }
 }
 
@@ -1355,86 +1210,233 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
     }
 }
 
-// ==================== OPTIMIZER COMMANDS (TODO) ====================
+// ==================== SCRIPT EXECUTION UTILITIES ====================
+
+/// Get the path to a script file based on the current platform
+fn get_script_path(script_name: &str) -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    let script_file = format!("{}.ps1", script_name);
+
+    #[cfg(not(target_os = "windows"))]
+    let script_file = format!("{}.sh", script_name);
+
+    // In development: scripts are copied to target/debug/scripts/ or target/release/scripts/
+    // In production: scripts are bundled alongside the app
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut path = exe_path.clone();
+    path.pop(); // Remove executable name
+
+    // First, try scripts in the same directory as the executable (dev mode or bundled)
+    let script_in_exe_dir = path.join("scripts").join(&script_file);
+    if script_in_exe_dir.exists() {
+        return script_in_exe_dir;
+    }
+
+    // Fallback: try src-tauri/scripts (for development before copy)
+    if path.ends_with("debug") || path.ends_with("release") {
+        path.pop(); // Remove debug/release
+        path.pop(); // Remove target
+        path.push("src-tauri");
+    }
+
+    path.join("scripts").join(&script_file)
+}
+
+/// Execute a script and return its output as JSON
+#[cfg(target_os = "windows")]
+fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let script_path = get_script_path(script_name);
+    let script_path_str = script_path.to_string_lossy().to_string();
+
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str])
+        .output()
+        .map_err(|e| format!("Failed to execute script: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(format!("Script failed: {}", stderr));
+    }
+
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
+}
+
+/// Execute a script with arguments and return its output as JSON
+#[cfg(target_os = "windows")]
+fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let script_path = get_script_path(script_name);
+    let script_path_str = script_path.to_string_lossy().to_string();
+
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str, args])
+        .output()
+        .map_err(|e| format!("Failed to execute script: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(format!("Script failed: {}", stderr));
+    }
+
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
+}
+
+/// Execute a script and return its output as JSON
+#[cfg(not(target_os = "windows"))]
+fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let script_path = get_script_path(script_name);
+    let script_path_str = script_path.to_string_lossy().to_string();
+
+    let output = Command::new("/bin/bash")
+        .arg(&script_path_str)
+        .output()
+        .map_err(|e| format!("Failed to execute script {}: {}", script_path_str, e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(format!("Script {} failed with status {:?}: {}", script_path_str, output.status.code(), stderr));
+    }
+
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output from {}: {} - Output was: {}", script_path_str, e, stdout))
+}
+
+/// Execute a script with arguments and return its output as JSON
+#[cfg(not(target_os = "windows"))]
+fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let script_path = get_script_path(script_name);
+    let script_path_str = script_path.to_string_lossy().to_string();
+
+    let output = Command::new("/bin/bash")
+        .arg(&script_path_str)
+        .arg(args)
+        .output()
+        .map_err(|e| format!("Failed to execute script: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(format!("Script failed: {}", stderr));
+    }
+
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
+}
+
+// ==================== OPTIMIZER COMMANDS (Async) ====================
 
 #[tauri::command]
-fn optimizer_scan_all(_app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
-    Ok(vec![])
+async fn optimizer_scan_all(_app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    // Run all scans in parallel using spawn_blocking to avoid blocking the main thread
+    let disk_handle = tokio::task::spawn_blocking(|| run_script("disk-scan"));
+    let memory_handle = tokio::task::spawn_blocking(|| run_script("memory-status"));
+    let health_handle = tokio::task::spawn_blocking(|| run_script("disk-health"));
+    let startup_handle = tokio::task::spawn_blocking(|| run_script("startup-list"));
+    let system_handle = tokio::task::spawn_blocking(|| run_script("system-info"));
+
+    let mut results = Vec::new();
+
+    // Collect results
+    if let Ok(Ok(disk)) = disk_handle.await {
+        results.push(disk);
+    }
+    if let Ok(Ok(memory)) = memory_handle.await {
+        results.push(memory);
+    }
+    if let Ok(Ok(health)) = health_handle.await {
+        results.push(health);
+    }
+    if let Ok(Ok(startup)) = startup_handle.await {
+        results.push(startup);
+    }
+    if let Ok(Ok(system)) = system_handle.await {
+        results.push(system);
+    }
+
+    Ok(results)
 }
 
 #[tauri::command]
-fn optimizer_disk_scan(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "dimension": "disk",
-        "status": "success",
-        "summary": "TODO",
-        "details": null
-    }))
+async fn optimizer_disk_scan(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("disk-scan"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_disk_health(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "dimension": "health",
-        "status": "success",
-        "summary": "TODO",
-        "details": null
-    }))
+async fn optimizer_disk_health(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("disk-health"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_disk_clean(_app: tauri::AppHandle, _categories_json: String) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "cleaned": 0,
-        "errors": 0,
-        "details": []
-    }))
+async fn optimizer_disk_clean(
+    _app: tauri::AppHandle,
+    categories_json: String,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        // Parse the categories JSON to extract array
+        let categories: Vec<String> = serde_json::from_str(&categories_json)
+            .unwrap_or_else(|_| vec![]);
+
+        // Convert back to JSON array string for the script
+        let categories_arg = serde_json::to_string(&categories).unwrap_or_else(|_| "[]".to_string());
+
+        run_script_with_args("disk-clean", &categories_arg)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_memory_status(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "dimension": "memory",
-        "status": "success",
-        "summary": "TODO",
-        "details": null
-    }))
+async fn optimizer_memory_status(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("memory-status"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_memory_optimize(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "freedBytes": 0,
-        "freedMB": 0
-    }))
+async fn optimizer_memory_optimize(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("memory-optimize"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_startup_list(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "dimension": "startup",
-        "status": "success",
-        "summary": "TODO",
-        "details": null
-    }))
+async fn optimizer_startup_list(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("startup-list"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_startup_toggle(_app: tauri::AppHandle, _item_json: String) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "success": true,
-        "message": "TODO"
-    }))
+async fn optimizer_startup_toggle(
+    _app: tauri::AppHandle,
+    item_json: String,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || run_script_with_args("startup-toggle", &item_json))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "dimension": "system",
-        "status": "success",
-        "summary": "TODO",
-        "details": null
-    }))
+async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("system-info"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 // ==================== MAIN ENTRY POINT ====================
@@ -1442,20 +1444,31 @@ fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Value, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             #[cfg(desktop)]
             {
                 // Position main window at right-center-bottom
                 if let Some(window) = app.webview_windows().get("main") {
+                    // 禁用窗口阴影，避免灰色边框
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    {
+                        let _ = window.set_shadow(false);
+                    }
                     if let Some(monitor) = window.current_monitor().ok().flatten() {
                         let screen_size = monitor.size();
                         let ball_size = *BALL_SIZE.lock().unwrap();
                         let size = ball_size + BALL_PADDING * 2;
                         let initial_x = screen_size.width as i32 - size as i32 - 50;
                         let initial_y = (screen_size.height as f32 * 0.65) as i32;
-                        let _ = window.set_position(Position::Physical(PhysicalPosition { x: initial_x, y: initial_y }));
+                        let _ = window.set_position(Position::Physical(PhysicalPosition {
+                            x: initial_x,
+                            y: initial_y,
+                        }));
                     }
                     let _ = window.show();
+                    let _ = window.set_focus();
                 }
             }
             Ok(())
@@ -1465,17 +1478,14 @@ pub fn run() {
             hide_main_window,
             show_menu_window,
             hide_menu_window,
-            show_submenu_window,
-            hide_submenu_window,
             show_optimizer_window,
             hide_optimizer_window,
             open_panel,
+            prepare_drag,
             ball_enter,
             ball_leave,
             menu_enter,
             menu_leave,
-            submenu_enter,
-            submenu_leave,
             update_settings,
             update_window_size,
             start_drag,
@@ -1483,10 +1493,9 @@ pub fn run() {
             drag_end,
             hide_docked_ball,
             set_window_position,
+            get_window_position,
             show_menu,
             hide_menu,
-            show_submenu,
-            hide_submenu,
             scroll_ball,
             optimizer_scan_all,
             optimizer_disk_scan,

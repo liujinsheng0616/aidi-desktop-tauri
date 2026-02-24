@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import FloatingBall from './components/FloatingBall.vue'
 
-const ballSize = ref(48)
+const ballSize = ref(60)
 const opacity = ref(100)
 const colorTheme = ref('cyan-purple')
 
@@ -11,15 +11,13 @@ function loadSettings() {
   const saved = localStorage.getItem('aidi-settings')
   if (saved) {
     const s = JSON.parse(saved)
-    ballSize.value = s.ballSize || 48
+    ballSize.value = s.ballSize || 60
     opacity.value = s.opacity ?? 100
     colorTheme.value = s.colorTheme || 'cyan-purple'
   }
 }
 
 onMounted(() => {
-  // 临时清除旧设置，确保使用默认值
-  localStorage.removeItem('aidi-settings')
   loadSettings()
 
   // Listen for settings updates from other windows

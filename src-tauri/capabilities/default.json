@@ -20,6 +20,10 @@
     "core:window:allow-set-position",
     "core:window:allow-set-size",
     "core:window:allow-get-all-windows",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-ignore-cursor-events",
+    "shell:allow-open",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-create"
   ]
 }

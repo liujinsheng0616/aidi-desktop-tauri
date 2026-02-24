@@ -17,10 +17,6 @@ import { platform } from '@tauri-apps/plugin-os'
 
 const isMac = ref(false)
 
-// Initialize platform detection
-const p = platform()
-isMac.value = p === 'macos'
-
 const {
   isScanning,
   scanProgress,
@@ -86,8 +82,10 @@ let unlistenSettings: (() => void) | null = null
 
 async function onSettingsUpdated(event: any) {
   const settings = event.payload as any
-  if (settings.themeMode) {
-    applyThemeFromMode(settings.themeMode)
+  // Handle both camelCase and snake_case
+  const mode = settings.theme_mode || settings.themeMode
+  if (mode) {
+    applyThemeFromMode(mode)
   }
 }
 
@@ -135,6 +133,8 @@ async function handleQuickOptimize() {
 }
 
 onMounted(async () => {
+  const p = await platform()
+  isMac.value = p === 'macos'
   applyTheme()
   scanAll()
   unlistenSettings = await listen('settings-updated', onSettingsUpdated)
@@ -149,7 +149,10 @@ onUnmounted(() => {
   <div class="optimizer-wrapper">
     <Card class="optimizer-card border-0 shadow-xl !p-0 !gap-0">
       <!-- Fixed Header (Draggable) -->
-      <CardHeader class="sticky-header draggable flex flex-row items-center justify-between p-3 pb-2 space-y-0 border-b">
+      <CardHeader
+        class="sticky-header flex flex-row items-center justify-between p-3 pb-2 space-y-0 border-b"
+        data-tauri-drag-region
+      >
         <div class="flex items-center gap-2">
           <span class="text-lg">⚡</span>
           <span class="font-semibold text-sm">系统优化</span>
@@ -180,7 +183,7 @@ onUnmounted(() => {
 
         <!-- Scanning progress -->
         <div v-else-if="isScanning" class="text-center py-6">
-          <div class="text-4xl mb-4">🔍</div>
+          <div class="text-4xl mb-4 scanning-icon">🔍</div>
           <div class="text-sm font-medium mb-1">{{ scanStatus }}</div>
           <div class="text-xs text-muted-foreground mb-3">{{ scanProgress }}%</div>
           <Progress :model-value="scanProgress" class="h-2 w-48 mx-auto" />
@@ -277,18 +280,20 @@ onUnmounted(() => {
 
 <style scoped>
 .optimizer-wrapper {
-  padding: 10px;
+  border-radius: 12px;
+  padding: 0;
   height: 100vh;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .optimizer-card {
   border-radius: 12px;
   background: var(--background);
+  border: 1px solid var(--border);
   height: 100%;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   overflow: hidden;
 }
 
@@ -298,11 +303,8 @@ onUnmounted(() => {
   z-index: 10;
 }
 
-.draggable {
-  -webkit-app-region: drag;
-}
-
-.draggable :deep(button) {
+/* 按钮区域不可拖动 */
+.sticky-header button {
   -webkit-app-region: no-drag;
 }
 
@@ -327,6 +329,10 @@ onUnmounted(() => {
 
 .scrollable-content::-webkit-scrollbar-thumb:hover {
   background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+}
+
+.scrollable-content::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .toast-message {
@@ -382,6 +388,26 @@ onUnmounted(() => {
   100% {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+/* 扫描放大镜动画 */
+.scanning-icon {
+  animation: scanning 1.5s ease-in-out infinite;
+}
+
+@keyframes scanning {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+  }
+  25% {
+    transform: scale(1.1) rotate(-5deg);
+  }
+  50% {
+    transform: scale(1) rotate(0deg);
+  }
+  75% {
+    transform: scale(1.1) rotate(5deg);
   }
 }
 </style>

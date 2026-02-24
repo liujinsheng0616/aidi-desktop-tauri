@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 
 const themeMode = ref('system')
 const opacity = ref([100])
-const ballSize = ref([48])
+const ballSize = ref([60])
 const colorTheme = ref('cyan-purple')
 
 const colorThemes = [
@@ -33,7 +33,7 @@ function loadSettings() {
     const s = JSON.parse(saved)
     themeMode.value = s.themeMode || 'system'
     opacity.value = [s.opacity ?? 100]
-    ballSize.value = [s.ballSize || 48]
+    ballSize.value = [s.ballSize || 60]
     colorTheme.value = s.colorTheme || 'cyan-purple'
   }
 }
@@ -85,9 +85,8 @@ function onMouseEnter() {
 }
 
 function onMouseLeave() {
-  console.log('Submenu mouse leave triggered!')
-  invoke('hide_menu_window')
-  invoke('hide_submenu_window')
+  // 通过后端状态机管理
+  invoke('submenu_leave')
 }
 
 watch(opacity, saveSettings)
@@ -100,12 +99,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div
-    class="submenu-wrapper"
-    @mouseenter="onMouseEnter"
-    @mouseleave="onMouseLeave"
-  >
-    <Card class="submenu-card border-0 !py-0 !gap-0">
+  <div class="submenu-wrapper">
+    <Card
+      class="submenu-card border-0 !py-0 !gap-0"
+      @mouseenter="onMouseEnter"
+      @mouseleave="onMouseLeave"
+    >
       <CardContent class="p-4 space-y-4">
         <!-- 主题模式 -->
         <div class="space-y-2">
@@ -150,8 +149,8 @@ onMounted(() => {
           </div>
           <Slider
             v-model="ballSize"
-            :min="30"
-            :max="60"
+            :min="60"
+            :max="100"
             :step="1"
           />
         </div>
@@ -159,20 +158,20 @@ onMounted(() => {
         <!-- 颜色主题 -->
         <div class="space-y-2">
           <Label class="text-xs uppercase text-muted-foreground font-medium">颜色主题</Label>
-          <div class="flex gap-3 justify-between">
+          <div class="grid grid-cols-3 gap-2">
             <button
               v-for="theme in colorThemes"
               :key="theme.id"
               :class="cn(
-                'flex flex-col items-center gap-1.5 p-1.5 rounded-lg transition-all',
+                'flex flex-col items-center gap-1 p-1 rounded-lg transition-all',
                 colorTheme === theme.id ? 'bg-accent' : 'hover:bg-accent/50'
               )"
               @click="setColorTheme(theme.id)"
             >
               <span
                 :class="cn(
-                  'w-8 h-8 rounded-full shadow-md transition-all',
-                  colorTheme === theme.id && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
+                  'w-7 h-7 rounded-full shadow-md transition-all',
+                  colorTheme === theme.id && 'ring-2 ring-primary ring-offset-1 ring-offset-background'
                 )"
                 :style="{ background: theme.gradient }"
               />
@@ -188,14 +187,17 @@ onMounted(() => {
 <style scoped>
 .submenu-wrapper {
   padding: 4px;
-  overflow: hidden;
   animation: submenu-enter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 让wrapper区域忽略鼠标事件，使透明区域穿透到下面的窗口 */
+  pointer-events: none;
 }
 
 .submenu-card {
   width: 236px;
   border-radius: 12px;
   background: var(--card);
+  /* 让卡片内容区域接收鼠标事件 */
+  pointer-events: auto;
 }
 
 @keyframes submenu-enter {
