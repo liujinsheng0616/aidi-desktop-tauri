@@ -1,0 +1,3 @@
+#!/bin/bash
+xattr -cr "/Applications/AIDI Desktop.app"
+exit 0
