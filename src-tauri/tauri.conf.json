@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AIDI",
+  "productName": "AIDI Desktop",
   "version": "1.0.0",
   "identifier": "com.aidi.desktop",
   "build": {
