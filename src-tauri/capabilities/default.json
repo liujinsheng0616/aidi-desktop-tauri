@@ -24,6 +24,7 @@
     "core:window:allow-set-ignore-cursor-events",
     "shell:allow-open",
     "core:webview:allow-create-webview-window",
-    "core:window:allow-create"
+    "core:window:allow-create",
+    "core:tray:default"
   ]
 }

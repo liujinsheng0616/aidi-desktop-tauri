@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, Position, Size};
+use tauri::tray::TrayIconBuilder;
+use tauri::menu::{Menu, MenuItem};
 
 // ==================== DATA STRUCTURES ====================
 
@@ -1449,6 +1451,40 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                // 创建菜单栏 tray icon
+                let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
+                if let Ok(icon) = tauri::image::Image::from_bytes(tray_icon_bytes) {
+                    let show_item = MenuItem::with_id(app, "show", "显示浮动球", true, None::<&str>)?;
+                    let optimizer_item = MenuItem::with_id(app, "optimizer", "系统优化", true, None::<&str>)?;
+                    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                    let menu = Menu::with_items(app, &[&show_item, &optimizer_item, &quit_item])?;
+
+                    let _ = TrayIconBuilder::new()
+                        .icon(icon)
+                        .tooltip("AIDI Desktop")
+                        .menu(&menu)
+                        .show_menu_on_left_click(true)
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "show" => {
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                            "optimizer" => {
+                                if let Some(w) = app.get_webview_window("optimizer") {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        })
+                        .build(app)?;
+                }
+
                 // Position main window at right-center-bottom
                 if let Some(window) = app.webview_windows().get("main") {
                     // 禁用窗口阴影，避免灰色边框

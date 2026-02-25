@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AIDI Desktop",
+  "productName": "AIDI",
   "version": "1.0.0",
   "identifier": "com.aidi.desktop",
   "build": {
@@ -72,6 +72,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["scripts/*"]
+    "resources": ["scripts/*", "icons/tray-icon.png"]
   }
 }
