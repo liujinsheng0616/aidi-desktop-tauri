@@ -431,13 +431,31 @@ fn calculate_menu_position(
 // ==================== WINDOW MANAGEMENT ====================
 
 #[tauri::command]
-fn show_main_window(window: tauri::Window) {
+fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
     let _ = window.show();
+    sync_toggle_menu_item(&app, true);
 }
 
 #[tauri::command]
-fn hide_main_window(window: tauri::Window) {
+fn hide_main_window(app: tauri::AppHandle, window: tauri::Window) {
     let _ = window.hide();
+    sync_toggle_menu_item(&app, false);
+}
+
+/// 同步 Tray 菜单"显示/隐藏浮动球"文字（重建菜单并 set_menu）
+fn sync_toggle_menu_item(app: &tauri::AppHandle, visible: bool) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let label = if visible { "隐藏浮动球" } else { "显示浮动球" };
+        if let (Ok(toggle_item), Ok(aigc_item), Ok(quit_item)) = (
+            MenuItem::with_id(app, "toggle", label, true, None::<&str>),
+            MenuItem::with_id(app, "aigc", "打开AIDI", true, None::<&str>),
+            MenuItem::with_id(app, "quit", "退出", true, None::<&str>),
+        ) {
+            if let Ok(menu) = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item]) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -1441,6 +1459,22 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
         .map_err(|e| format!("Task join error: {}", e))?
 }
 
+#[tauri::command]
+fn show_login_window(app: tauri::AppHandle) {
+    if let Some(w) = app.webview_windows().get("login") {
+        let _ = w.center();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+#[tauri::command]
+fn close_login_window(app: tauri::AppHandle) {
+    if let Some(w) = app.webview_windows().get("login") {
+        let _ = w.hide();
+    }
+}
+
 // ==================== MAIN ENTRY POINT ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1448,41 +1482,49 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             #[cfg(desktop)]
             {
                 // 创建菜单栏 tray icon
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
                 if let Ok(icon) = tauri::image::Image::from_bytes(tray_icon_bytes) {
-                    let show_item = MenuItem::with_id(app, "show", "显示浮动球", true, None::<&str>)?;
-                    let optimizer_item = MenuItem::with_id(app, "optimizer", "系统优化", true, None::<&str>)?;
+                    // 初始状态悬浮球隐藏中，菜单显示"显示浮动球"
+                    let toggle_item = MenuItem::with_id(app, "toggle", "显示浮动球", true, None::<&str>)?;
+                    let aigc_item = MenuItem::with_id(app, "aigc", "打开AIDI", true, None::<&str>)?;
                     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-                    let menu = Menu::with_items(app, &[&show_item, &optimizer_item, &quit_item])?;
+                    let menu = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item])?;
 
-                    let _ = TrayIconBuilder::new()
+                    let _ = TrayIconBuilder::with_id("main-tray")
                         .icon(icon)
                         .tooltip("AIDI Desktop")
                         .menu(&menu)
                         .show_menu_on_left_click(true)
-                        .on_menu_event(|app, event| match event.id.as_ref() {
-                            "show" => {
-                                if let Some(w) = app.get_webview_window("main") {
-                                    let _ = w.show();
-                                    let _ = w.set_focus();
-                                }
-                            }
-                            "optimizer" => {
-                                if let Some(w) = app.get_webview_window("optimizer") {
-                                    let _ = w.show();
-                                    let _ = w.set_focus();
-                                }
-                            }
-                            "quit" => {
-                                app.exit(0);
-                            }
-                            _ => {}
-                        })
                         .build(app)?;
+
+                    // 全局菜单事件监听（菜单重建后依然有效）
+                    app.on_menu_event(|app, event| match event.id.as_ref() {
+                        "toggle" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let visible = w.is_visible().unwrap_or(false);
+                                if visible {
+                                    let _ = w.hide();
+                                } else {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                                sync_toggle_menu_item(app, !visible);
+                            }
+                        }
+                        "aigc" => {
+                            // 通知前端打开 AIGC 窗口（前端持有 fsUserId）
+                            let _ = app.emit_to("main", "open-aigc", ());
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    });
                 }
 
                 // Position main window at right-center-bottom
@@ -1503,10 +1545,30 @@ pub fn run() {
                             y: initial_y,
                         }));
                     }
+                    // show 触发 webview 初始化（App.vue 开始执行），
+                    // 随即 hide 避免浮动球提前显示；
+                    // App.vue 内部根据 token 再决定显示浮动球或登录窗口
                     let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = window.hide();
                 }
             }
+            // 注册全局快捷键 Alt+Q：切换悬浮球显示/隐藏
+            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+            let shortcut: Shortcut = "Alt+Q".parse().expect("invalid shortcut");
+            app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    if let Some(window) = app.webview_windows().get("main") {
+                        let visible = window.is_visible().unwrap_or(false);
+                        if visible {
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.show();
+                        }
+                        sync_toggle_menu_item(app, !visible);
+                    }
+                }
+            })?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1542,6 +1604,8 @@ pub fn run() {
             optimizer_startup_toggle,
             optimizer_system_info,
             optimizer_disk_clean,
+            show_login_window,
+            close_login_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

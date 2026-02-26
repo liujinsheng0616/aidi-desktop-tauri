@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { X, RefreshCw } from 'lucide-vue-next'
-import { Card, CardHeader, CardContent, CardFooter } from '@/components/ui/card'
+import { RefreshCw } from 'lucide-vue-next'
+import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import StatusCard from './StatusCard.vue'
@@ -11,11 +11,12 @@ import StartupManager from './StartupManager.vue'
 import DiskHealth from './DiskHealth.vue'
 import SystemInfo from './SystemInfo.vue'
 import { useOptimizer } from '@/stores/optimizer'
-
-const { ipcRenderer } = require('electron')
+import { listen } from '@tauri-apps/api/event'
 
 // Platform detection
-const isWin = process.platform === 'win32'
+const isWin = navigator.userAgentData
+  ? navigator.userAgentData.platform === 'Windows'
+  : navigator.platform.startsWith('Win')
 
 const {
   isScanning,
@@ -78,14 +79,10 @@ function applyTheme() {
   applyThemeFromMode(mode)
 }
 
-function onSettingsUpdated(_event: any, settings: any) {
-  if (settings.themeMode) {
+function onSettingsUpdated(settings: any) {
+  if (settings?.themeMode) {
     applyThemeFromMode(settings.themeMode)
   }
-}
-
-function handleClose() {
-  ipcRenderer.send('hide-optimizer')
 }
 
 async function handleQuickOptimize() {
@@ -127,43 +124,32 @@ async function handleQuickOptimize() {
   }
 }
 
-onMounted(() => {
+let unlistenSettings: (() => void) | null = null
+
+onMounted(async () => {
   applyTheme()
   scanAll()
-  ipcRenderer.on('settings-updated', onSettingsUpdated)
+  unlistenSettings = await listen<any>('settings-updated', (event) => {
+    onSettingsUpdated(event.payload)
+  })
 })
 
 onUnmounted(() => {
-  ipcRenderer.removeListener('settings-updated', onSettingsUpdated)
+  if (unlistenSettings) unlistenSettings()
 })
 </script>
 
 <template>
   <div class="optimizer-wrapper">
     <Card class="optimizer-card border-0 shadow-xl !p-0 !gap-0">
-      <!-- Fixed Header (Draggable) -->
-      <CardHeader class="sticky-header draggable flex flex-row items-center justify-between p-3 pb-2 space-y-0 border-b">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">⚡</span>
-          <span class="font-semibold text-sm">系统优化</span>
-        </div>
-        <div class="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            :disabled="isScanning"
-            @click="scanAll"
-          >
-            <RefreshCw :size="14" :class="{ 'animate-spin': isScanning }" />
-          </Button>
-          <Button variant="ghost" size="icon-sm" @click="handleClose">
-            <X :size="14" />
-          </Button>
-        </div>
-      </CardHeader>
-
       <!-- Scrollable Content -->
       <CardContent class="scrollable-content p-3 space-y-2">
+        <!-- Refresh button row -->
+        <div class="flex justify-end -mt-1 mb-1">
+          <Button variant="ghost" size="icon-sm" :disabled="isScanning" @click="scanAll">
+            <RefreshCw :size="14" :class="{ 'animate-spin': isScanning }" />
+          </Button>
+        </div>
         <!-- Optimize success animation -->
         <div v-if="showOptimizeSuccess" class="text-center py-8">
           <div class="text-5xl mb-4 success-bounce">✅</div>
@@ -283,20 +269,6 @@ onUnmounted(() => {
   flex-direction: column;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   overflow: hidden;
-}
-
-.sticky-header {
-  flex-shrink: 0;
-  background: var(--background);
-  z-index: 10;
-}
-
-.draggable {
-  -webkit-app-region: drag;
-}
-
-.draggable :deep(button) {
-  -webkit-app-region: no-drag;
 }
 
 .scrollable-content {

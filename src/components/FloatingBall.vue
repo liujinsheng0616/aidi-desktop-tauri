@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
+import { getUser } from '../stores/auth'
 
 const props = defineProps<{
   size?: number
@@ -191,14 +192,18 @@ async function handleMouseUp() {
         const windows = await getAllWebviewWindows()
         const existingWindow = windows.find(w => w.label === 'aigc-window')
 
+        const fsUserId = getUser()?.fsUserId ?? ''
+        const aigcUrl = `https://aidi.yadea.com.cn/aigc/#/login?userId=${fsUserId}`
+
         if (existingWindow) {
-          // 窗口已存在，显示并聚焦
+          // 窗口已存在，更新 URL 后显示并聚焦
+          await existingWindow.navigate(aigcUrl)
           await existingWindow.show()
           await existingWindow.setFocus()
         } else {
           // 窗口不存在，创建新窗口
           const webview = new WebviewWindow('aigc-window', {
-            url: 'https://aidi.yadea.com.cn/aigc/?lk_jump_to_browser=true',
+            url: aigcUrl,
             title: 'AIGC',
             width: 1200,
             height: 800,

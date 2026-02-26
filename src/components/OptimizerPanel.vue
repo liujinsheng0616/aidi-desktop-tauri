@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { X, RefreshCw } from 'lucide-vue-next'
+import { RefreshCw } from 'lucide-vue-next'
 import { Card, CardHeader, CardContent, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -11,7 +11,6 @@ import StartupManager from './optimizer/StartupManager.vue'
 import DiskHealth from './optimizer/DiskHealth.vue'
 import SystemInfo from './optimizer/SystemInfo.vue'
 import { useOptimizer } from '@/stores/optimizer'
-import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { platform } from '@tauri-apps/plugin-os'
 
@@ -89,10 +88,6 @@ async function onSettingsUpdated(event: any) {
   }
 }
 
-function handleClose() {
-  invoke('hide_optimizer_window')
-}
-
 async function handleQuickOptimize() {
   if (!hasSelections.value) {
     showToast('请先勾选要优化的项目')
@@ -150,14 +145,10 @@ onUnmounted(() => {
     <Card class="optimizer-card border-0 shadow-xl !p-0 !gap-0">
       <!-- Fixed Header (Draggable) -->
       <CardHeader
-        class="sticky-header flex flex-row items-center justify-between p-3 pb-2 space-y-0 border-b"
+        class="sticky-header flex flex-row items-center justify-end p-3 pb-2 space-y-0 border-b"
         data-tauri-drag-region
       >
-        <div class="flex items-center gap-2">
-          <span class="text-lg">⚡</span>
-          <span class="font-semibold text-sm">系统优化</span>
-        </div>
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-1" style="-webkit-app-region: no-drag">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -165,9 +156,6 @@ onUnmounted(() => {
             @click="scanAll"
           >
             <RefreshCw :size="14" :class="{ 'animate-spin': isScanning }" />
-          </Button>
-          <Button variant="ghost" size="icon-sm" @click="handleClose">
-            <X :size="14" />
           </Button>
         </div>
       </CardHeader>
@@ -280,7 +268,6 @@ onUnmounted(() => {
 
 <style scoped>
 .optimizer-wrapper {
-  border-radius: 12px;
   padding: 0;
   height: 100vh;
   box-sizing: border-box;
@@ -288,7 +275,7 @@ onUnmounted(() => {
 }
 
 .optimizer-card {
-  border-radius: 12px;
+  border-radius: 0 0 12px 12px;
   background: var(--background);
   border: 1px solid var(--border);
   height: 100%;

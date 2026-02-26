@@ -5,7 +5,11 @@
       "Bash(cargo check:*)",
       "Bash(npx vue-tsc:*)",
       "Bash(cargo build:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "WebFetch(domain:lf-scm-sg.larksuitecdn.com)",
+      "WebFetch(domain:lf1-cdn-tos.bytegoofy.com)",
+      "WebSearch",
+      "WebFetch(domain:sf3-cn.feishucdn.com)"
     ]
   }
 }

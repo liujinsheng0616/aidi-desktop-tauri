@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for main window and optimizer",
-  "windows": ["main", "menu", "submenu", "optimizer", "panel"],
+  "windows": ["main", "menu", "submenu", "optimizer", "panel", "login"],
   "permissions": [
     "core:default",
     "core:event:allow-emit",
@@ -25,6 +25,9 @@
     "shell:allow-open",
     "core:webview:allow-create-webview-window",
     "core:window:allow-create",
-    "core:tray:default"
+    "core:tray:default",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered"
   ]
 }

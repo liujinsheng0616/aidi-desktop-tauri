@@ -82,6 +82,50 @@ npx tauri build
 
 `src/components/ui/` 下的基础 UI 组件遵循 shadcn-vue 模式，基于 `reka-ui`（Radix Vue 的分支）。`src/lib/utils.ts` 中的 `cn()` 工具函数组合了 `clsx` + `tailwind-merge`。
 
+## 目录结构
+
+```
+aidi-desktop-tauri/
+├── index.html                    # 浮动球窗口
+├── menu.html                     # 右键菜单窗口
+├── optimizer.html                # 系统优化窗口
+├── login.html                    # 飞书登录窗口
+├── panel.html                    # AI 面板窗口（动态创建）
+├── vite.config.ts                # 多页应用配置，端口 1420
+│
+├── src/
+│   ├── main.ts                   # 浮动球 - 入口脚本
+│   ├── menu.ts                   # 右键菜单 - 入口脚本
+│   ├── optimizer.ts              # 系统优化 - 入口脚本
+│   ├── login.ts                  # 飞书登录 - 入口脚本
+│   ├── panel.ts                  # AI 面板 - 入口脚本
+│   ├── App.vue                   # 浮动球 - 根组件
+│   ├── components/
+│   │   ├── FloatingBall.vue      # 浮动球 - 可拖拽球体、边缘吸附
+│   │   ├── MenuPanel.vue         # 右键菜单 - 菜单面板
+│   │   ├── LoginPage.vue         # 飞书登录 - 扫码登录页
+│   │   └── optimizer/
+│   │       ├── OptimizerPanel.vue   # 系统优化 - 主面板
+│   │       ├── DiskClean.vue        # 系统优化 - 磁盘清理
+│   │       ├── DiskHealth.vue       # 系统优化 - 磁盘健康
+│   │       ├── MemoryStatus.vue     # 系统优化 - 内存状态
+│   │       ├── StartupManager.vue   # 系统优化 - 启动项管理
+│   │       └── SystemInfo.vue       # 系统优化 - 系统信息
+│   └── stores/
+│       ├── auth.ts               # 飞书登录 - OAuth 认证逻辑
+│       └── optimizer.ts          # 系统优化 - 状态管理
+│
+└── src-tauri/
+    ├── tauri.conf.json           # 窗口配置、权限声明
+    ├── src/
+    │   └── lib.rs                # 全部后端逻辑（DockState、所有 invoke 命令）
+    └── scripts/                  # 系统优化 - 平台脚本（macOS .sh / Windows .ps1）
+        ├── disk-{scan,clean,health}.sh
+        ├── memory-{status,optimize}.sh
+        ├── startup-{list,toggle}.sh
+        └── system-info.sh
+```
+
 ## 关键技术细节
 
 - **端口 1420** 在 `vite.config.ts` 中硬编码，Tauri 的 `devUrl` 必须使用此端口
