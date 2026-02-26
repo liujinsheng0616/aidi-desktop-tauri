@@ -14,8 +14,9 @@ import { useOptimizer } from '@/stores/optimizer'
 import { listen } from '@tauri-apps/api/event'
 
 // Platform detection
-const isWin = navigator.userAgentData
-  ? navigator.userAgentData.platform === 'Windows'
+const nav = navigator as any
+const isWin = nav.userAgentData
+  ? nav.userAgentData.platform === 'Windows'
   : navigator.platform.startsWith('Win')
 
 const {

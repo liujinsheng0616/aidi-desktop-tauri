@@ -56,7 +56,7 @@ onMounted(async () => {
     const windows = await getAllWebviewWindows()
     const existing = windows.find(w => w.label === 'aigc-window')
     if (existing) {
-      await existing.navigate(aigcUrl)
+      await (existing as any).navigate(aigcUrl)
       await existing.show()
       await existing.setFocus()
     } else {

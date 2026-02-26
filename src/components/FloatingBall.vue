@@ -197,7 +197,7 @@ async function handleMouseUp() {
 
         if (existingWindow) {
           // 窗口已存在，更新 URL 后显示并聚焦
-          await existingWindow.navigate(aigcUrl)
+          await (existingWindow as any).navigate(aigcUrl)
           await existingWindow.show()
           await existingWindow.setFocus()
         } else {
