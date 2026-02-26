@@ -11,7 +11,7 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const { cleanDisk, refreshDisk, optimizeSelections, toggleDiskCategory } = useOptimizer()
+const { cleanDisk, refreshDisk, optimizeSelections, toggleDiskCategory, isOperating } = useOptimizer()
 
 interface CleanDetail {
   category: string
@@ -152,6 +152,7 @@ function formatSize(bytes: number) {
 
 async function handleClean() {
   isCleaning.value = true
+  isOperating.value = true
   cleanResult.value = null
   resetDetailsPagination()
 
@@ -170,6 +171,7 @@ async function handleClean() {
     console.error('Clean failed:', e)
   } finally {
     isCleaning.value = false
+    isOperating.value = false
   }
 
   // Reset selected categories after cleaning is fully complete
@@ -212,7 +214,7 @@ async function handleClean() {
 
     <div class="flex items-center justify-between pt-2 border-t">
       <span class="text-sm font-medium">已选: {{ selectedSizeFormatted }}</span>
-      <Button size="sm" :disabled="isCleaning || !hasSelection" @click="showConfirm = true">
+      <Button size="sm" :disabled="isCleaning || isOperating || !hasSelection" @click="showConfirm = true">
         {{ isCleaning ? '清理中...' : '清理所选' }}
       </Button>
     </div>

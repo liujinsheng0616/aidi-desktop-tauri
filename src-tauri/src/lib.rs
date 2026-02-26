@@ -493,6 +493,7 @@ fn show_optimizer_window(app: tauri::AppHandle) {
     if let Some(optimizer_window) = windows.get("optimizer") {
         let _ = optimizer_window.show();
         let _ = optimizer_window.set_focus();
+        let _ = optimizer_window.emit("optimizer-shown", ());
     }
 }
 

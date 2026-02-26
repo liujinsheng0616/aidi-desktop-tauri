@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { RefreshCw } from 'lucide-vue-next'
-import { Card, CardHeader, CardContent, CardFooter } from '@/components/ui/card'
+import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import StatusCard from './optimizer/StatusCard.vue'
@@ -18,6 +18,7 @@ const isMac = ref(false)
 
 const {
   isScanning,
+  isOperating,
   scanProgress,
   scanStatus,
   lastScanTime,
@@ -78,6 +79,7 @@ function applyTheme() {
 }
 
 let unlistenSettings: (() => void) | null = null
+let unlistenShown: (() => void) | null = null
 
 async function onSettingsUpdated(event: any) {
   const settings = event.payload as any
@@ -95,6 +97,7 @@ async function handleQuickOptimize() {
   }
 
   isQuickOptimizing.value = true
+  isOperating.value = true
   try {
     const result = await quickOptimize()
 
@@ -124,6 +127,7 @@ async function handleQuickOptimize() {
     showToast('优化失败，请重试')
   } finally {
     isQuickOptimizing.value = false
+    isOperating.value = false
   }
 }
 
@@ -133,33 +137,18 @@ onMounted(async () => {
   applyTheme()
   scanAll()
   unlistenSettings = await listen('settings-updated', onSettingsUpdated)
+  unlistenShown = await listen('optimizer-shown', () => scanAll())
 })
 
 onUnmounted(() => {
   if (unlistenSettings) unlistenSettings()
+  if (unlistenShown) unlistenShown()
 })
 </script>
 
 <template>
   <div class="optimizer-wrapper">
     <Card class="optimizer-card border-0 shadow-xl !p-0 !gap-0">
-      <!-- Fixed Header (Draggable) -->
-      <CardHeader
-        class="sticky-header flex flex-row items-center justify-end p-3 pb-2 space-y-0 border-b"
-        data-tauri-drag-region
-      >
-        <div class="flex items-center gap-1" style="-webkit-app-region: no-drag">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            :disabled="isScanning"
-            @click="scanAll"
-          >
-            <RefreshCw :size="14" :class="{ 'animate-spin': isScanning }" />
-          </Button>
-        </div>
-      </CardHeader>
-
       <!-- Scrollable Content -->
       <CardContent class="scrollable-content p-3 space-y-2">
         <!-- Optimize success animation -->
@@ -242,12 +231,23 @@ onUnmounted(() => {
           <!-- Quick optimize button -->
           <Button
             class="w-full mt-2"
-            :disabled="isQuickOptimizing"
+            :disabled="isQuickOptimizing || isOperating"
             @click="handleQuickOptimize"
           >
             <template v-if="isQuickOptimizing">优化中...</template>
             <template v-else-if="selectionCount > 0">一键优化 ({{ selectionCount }} 项)</template>
             <template v-else>一键优化</template>
+          </Button>
+
+          <!-- Rescan button -->
+          <Button
+            variant="outline"
+            class="w-full"
+            :disabled="isScanning || isOperating"
+            @click="scanAll"
+          >
+            <RefreshCw :size="14" :class="['mr-2', { 'animate-spin': isScanning }]" />
+            重新扫描
           </Button>
 
           <!-- Toast message -->
@@ -298,6 +298,7 @@ onUnmounted(() => {
 .scrollable-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Custom scrollbar */

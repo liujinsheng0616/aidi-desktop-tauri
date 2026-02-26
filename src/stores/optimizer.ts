@@ -151,6 +151,7 @@ const selectionCount = computed(() => {
 
 // Reactive state
 const isScanning = ref(false)
+const isOperating = ref(false)  // 全局操作中状态（清理/优化期间置为 true）
 const scanProgress = ref(0)
 const scanStatus = ref('')
 const lastScanTime = ref<string | null>(null)
@@ -397,6 +398,7 @@ export function useOptimizer() {
   return {
     // State
     isScanning,
+    isOperating,
     scanProgress,
     scanStatus,
     lastScanTime,
