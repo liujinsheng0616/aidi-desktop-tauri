@@ -28,6 +28,8 @@ async function initApp() {
   if (token) {
     fetchCurrentUser(token).then(setUser).catch(() => {})
   }
+  // 先同步窗口大小，消除 tauri.conf.json 初始 120×120 与 ballSize 的不一致
+  await invoke('update_window_size', { size: ballSize.value })
   initialized.value = true
   await invoke('show_main_window')
 }
@@ -96,6 +98,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   background: transparent;
-  overflow: hidden;
+  pointer-events: none;   /* 透明 padding 区域鼠标穿透到桌面 */
 }
 </style>

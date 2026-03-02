@@ -33,6 +33,7 @@ const {
   selectionCount,
   scanAll,
   quickOptimize,
+  deviceReported,
 } = useOptimizer()
 
 const openCards = ref<Record<string, boolean>>({
@@ -168,6 +169,14 @@ onUnmounted(() => {
 
         <!-- Results -->
         <template v-else>
+          <!-- Device report success message -->
+          <div v-if="deviceReported" class="text-center py-2 px-3 mb-3 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg">
+            <div class="flex items-center justify-center gap-2 text-sm text-green-700 dark:text-green-300">
+              <span>✅</span>
+              <span>设备信息已上报</span>
+            </div>
+          </div>
+
           <!-- Disk -->
           <StatusCard
             v-if="diskResult"

@@ -21,7 +21,6 @@ export default defineConfig(async () => ({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        menu: resolve(__dirname, "menu.html"),
         optimizer: resolve(__dirname, "optimizer.html"),
         login: resolve(__dirname, "login.html"),
       },

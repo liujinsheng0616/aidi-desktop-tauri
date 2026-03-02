@@ -4,13 +4,27 @@ on:
   push:
     tags:
       - 'v*'
+      - 'v*-test'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: '构建环境'
+        required: true
+        type: choice
+        options:
+          - prod
+          - test
+        default: 'prod'
 
 permissions:
   contents: write
 
 jobs:
   build:
+    env:
+      # 根据 tag 或手动输入确定环境
+      # 如果 tag 以 -test 结尾，则为 test 环境，否则为 prod
+      AIDI_ENV: ${{ contains(github.ref_name, '-test') && 'test' || github.event.inputs.environment || 'prod' }}
     strategy:
       fail-fast: false
       matrix:
@@ -53,10 +67,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'AIDI Desktop ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download and install this version.'
+          releaseName: 'AIDI Desktop ${{ github.ref_name }} (${{ env.AIDI_ENV }})'
+          releaseBody: |
+            环境: ${{ env.AIDI_ENV }}
+
+            See the assets to download and install this version.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ env.AIDI_ENV == 'test' }}
           args: ${{ matrix.args }}
 
       - name: Build PKG installer (macOS)

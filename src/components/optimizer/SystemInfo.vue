@@ -31,7 +31,10 @@ const sections = [
     items: [
       { label: '制造商', value: () => props.details.manufacturer },
       { label: '型号', value: () => props.details.model },
+      { label: '序列号', value: () => props.details.serialNumber },
+      { label: '出厂时间', value: () => props.details.manufactureDate },
       { label: '主机名', value: () => props.details.hostname },
+      { label: 'IP 地址', value: () => props.details.ip || '-' },
       { label: '内存', value: () => `${props.details.memory?.totalGB} GB` },
       { label: '存储', value: () => `${props.details.storage?.totalGB} GB` },
     ],

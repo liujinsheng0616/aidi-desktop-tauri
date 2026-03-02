@@ -18,6 +18,35 @@ pub struct Settings {
     pub theme_mode: String,
 }
 
+// ==================== EXTERNAL URL CONFIGURATION ====================
+
+/// 获取外部项目的基础 URL
+/// 优先使用环境变量 AIDI_EXTERNAL_URL，其次从环境变量 AIDI_ENV 决定使用哪个环境
+/// 支持的环境：dev（开发）、test（测试）、prod（生产）
+/// 如果都没设置，默认使用开发环境地址 http://127.0.0.1:5173
+fn get_external_url_base(_app: &AppHandle) -> String {
+    // 优先读取环境变量
+    if let Ok(url) = std::env::var("AIDI_EXTERNAL_URL") {
+        return url;
+    }
+
+    // 通过环境变量 AIDI_ENV 决定使用哪个环境
+    let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "dev".to_string());
+
+    // 根据环境返回对应的 URL
+    match env.as_str() {
+        "test" => "https://microsapptest.yadea.com.cn/aidi-desktop",
+        "prod" => "https://aidi.yadea.com.cn/aidi-desktop",
+        _ => "http://127.0.0.1:5173", // dev 或其他情况默认
+    }.to_string()
+}
+
+/// 构建菜单页面的完整 URL
+fn build_menu_url(app: &AppHandle, direction: &str) -> String {
+    let base_url = get_external_url_base(app);
+    format!("{}/menu?direction={}", base_url, direction)
+}
+
 // ==================== POSITION DETECTION SYSTEM ====================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +137,10 @@ struct DockState {
     ball_position: Option<BallPosition>, // 悬浮球位置分类
     menu_position: MenuPosition,         // 菜单位置策略
     menu_alignment: MenuAlignment,       // 菜单对齐方式
+    // 子菜单展开状态
+    menu_window_x: i32,       // 菜单窗口初始 x（逻辑像素），menu_expand 需要用
+    menu_window_y: i32,       // 菜单窗口初始 y
+    submenu_opens_left: bool, // true = 子菜单向左展开（球在右侧）
 }
 
 // Global state version counter for canceling stale operations
@@ -138,6 +171,9 @@ static DOCK_STATE: Mutex<DockState> = Mutex::new(DockState {
     ball_position: None,
     menu_position: MenuPosition::Below,
     menu_alignment: MenuAlignment::LeftAlign,
+    menu_window_x: 0,
+    menu_window_y: 0,
+    submenu_opens_left: false,
 });
 
 // 定时器句柄（使用 Arc<Mutex<Option<...>>> 存储跨线程可访问的句柄）
@@ -145,7 +181,7 @@ static HIDE_DOCK_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(
 static POP_PROTECTION_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 
 static BALL_SIZE: Mutex<u32> = Mutex::new(60);
-const BALL_PADDING: u32 = 4; // 外环需要 ballSize + 8，窗口尺寸 = ballSize + BALL_PADDING * 2
+const BALL_PADDING: u32 = 12; // 外环需要 ballSize + 24，窗口尺寸 = ballSize + BALL_PADDING * 2，防止光晕被截断
 const EDGE_THRESHOLD: i32 = 15; // Edge detection threshold (reduced for better UX)
 const DOCK_VISIBLE_AMOUNT: i32 = 35; // Fixed visible amount when docked (pixels)
 
@@ -1037,6 +1073,139 @@ fn get_window_position(window: tauri::Window) -> (i32, i32) {
     }
 }
 
+fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::WebviewWindow, tauri::Error> {
+    let app_handle = app.clone();
+    let menu_url_str = build_menu_url(app, direction);
+    let menu_url = tauri::WebviewUrl::External(
+        tauri::Url::parse(&menu_url_str).unwrap()
+    );
+    tauri::WebviewWindowBuilder::new(app, "menu", menu_url)
+        .title("Menu")
+        .inner_size(192.0, 116.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(false)
+        .incognito(true)
+        .on_navigation(move |url| {
+            // 通用命令桥：解析 hash 中的 invoke=<命令名>[&param=val...]，执行白名单内的命令
+            if let Some(fragment) = url.fragment() {
+                if let Some(rest) = fragment.strip_prefix("invoke=") {
+                    // 解析命令名（第一个 & 之前）和参数
+                    let (cmd, params_str) = match rest.find('&') {
+                        Some(idx) => (&rest[..idx], &rest[idx+1..]),
+                        None => (rest, ""),
+                    };
+                    const ALLOWED: &[&str] = &[
+                        "show_optimizer_window",
+                        "hide_optimizer_window",
+                        "hide_menu",
+                        "show_main_window",
+                        "hide_main_window",
+                        "show_login_window",
+                        "hide_login_window",
+                        "menu_expand",
+                        "menu_collapse",
+                        "update_settings",
+                    ];
+                    if ALLOWED.contains(&cmd) {
+                        let app2 = app_handle.clone();
+                        let cmd_owned = cmd.to_string();
+                        let params_owned = params_str.to_string();
+                        std::thread::spawn(move || {
+                            match cmd_owned.as_str() {
+                                "show_optimizer_window" => show_optimizer_window(app2),
+                                "hide_optimizer_window" => hide_optimizer_window(app2),
+                                "hide_menu" => hide_menu(app2),
+                                "show_main_window" => {
+                                    if let Some(w) = app2.webview_windows().get("main") {
+                                        let _ = w.show();
+                                        sync_toggle_menu_item(&app2, true);
+                                    }
+                                }
+                                "hide_main_window" => {
+                                    if let Some(w) = app2.webview_windows().get("main") {
+                                        let _ = w.hide();
+                                        sync_toggle_menu_item(&app2, false);
+                                    }
+                                }
+                                "show_login_window" => show_login_window(app2),
+                                "hide_login_window" => {
+                                    if let Some(w) = app2.webview_windows().get("login") {
+                                        let _ = w.hide();
+                                    }
+                                }
+                                "menu_expand" => {
+                                    if let Some(w) = app2.webview_windows().get("menu") {
+                                        let (init_x, init_y, opens_left) = {
+                                            let s = DOCK_STATE.lock().unwrap();
+                                            (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
+                                        };
+                                        if opens_left {
+                                            // 向左展开：窗口 x 左移244，宽度扩至436
+                                            let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                                                x: (init_x - 244) as f64,
+                                                y: init_y as f64,
+                                            }));
+                                        }
+                                        let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                                            width: 436.0,
+                                            height: 360.0,
+                                        }));
+                                    }
+                                }
+                                "menu_collapse" => {
+                                    if let Some(w) = app2.webview_windows().get("menu") {
+                                        let (init_x, init_y, opens_left) = {
+                                            let s = DOCK_STATE.lock().unwrap();
+                                            (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
+                                        };
+                                        if opens_left {
+                                            // 收起：恢复初始 x，宽度缩回192
+                                            let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                                                x: init_x as f64,
+                                                y: init_y as f64,
+                                            }));
+                                        }
+                                        let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                                            width: 192.0,
+                                            height: 116.0,
+                                        }));
+                                    }
+                                }
+                                "update_settings" => {
+                                    // 解析 query 参数：ball_size=N&opacity=N&color_theme=X&theme_mode=X
+                                    let mut ball_size: u32 = 60;
+                                    let mut opacity: u32 = 100;
+                                    let mut color_theme = String::from("cyan-purple");
+                                    let mut theme_mode = String::from("system");
+                                    for pair in params_owned.split('&') {
+                                        if let Some((k, v)) = pair.split_once('=') {
+                                            match k {
+                                                "ball_size" => { ball_size = v.parse().unwrap_or(60); }
+                                                "opacity" => { opacity = v.parse().unwrap_or(100); }
+                                                "color_theme" => { color_theme = v.to_string(); }
+                                                "theme_mode" => { theme_mode = v.to_string(); }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    let settings = Settings { ball_size, opacity, color_theme, theme_mode };
+                                    update_settings(app2, settings);
+                                }
+                                _ => {}
+                            }
+                        });
+                    }
+                }
+            }
+            true
+        })
+        .build()
+}
+
 #[tauri::command]
 fn show_menu(app: tauri::AppHandle) {
     // 1. 先更新状态，保护球不被隐藏
@@ -1064,9 +1233,6 @@ fn show_menu(app: tauri::AppHandle) {
     let Some(main_window) = windows.get("main") else {
         return;
     };
-    let Some(menu_window) = windows.get("menu") else {
-        return;
-    };
 
     let Ok(ball_size) = main_window.outer_size() else {
         return;
@@ -1082,15 +1248,12 @@ fn show_menu(app: tauri::AppHandle) {
     let screen_width = (screen_size.width as f64 / scale_factor) as i32;
     let screen_height = (screen_size.height as f64 / scale_factor) as i32;
 
-    // 获取菜单窗口的实际尺寸
-    let Ok(menu_size) = menu_window.outer_size() else {
-        return;
-    };
-    let menu_width = (menu_size.width as f64 / scale_factor) as i32;
+    // 菜单窗口固定宽度 436（不依赖已存在的窗口实例）
+    let menu_width: i32 = 436;
     // 使用主菜单的实际高度（约100px），而不是窗口高度（380px）
     // 因为菜单位置计算应该基于主菜单，而不是整个窗口
     let main_menu_height: i32 = 100;
-    let menu_gap: i32 = 8; // 球和菜单之间的间距
+    let menu_gap: i32 = 4; // 球和菜单之间的间距
 
     // 获取球的位置（直接使用窗口实际位置）
     let Ok(ball_pos) = main_window.outer_position() else {
@@ -1101,26 +1264,41 @@ fn show_menu(app: tauri::AppHandle) {
     let ball_x = (ball_pos.x as f64 / scale_factor) as i32;
     let ball_y = (ball_pos.y as f64 / scale_factor) as i32;
 
+    // 球的视觉尺寸 = BALL_SIZE + BALL_PADDING*2（与 update_window_size 一致）
+    // 窗口可能比视觉球大（如初始 120x120），球居中在窗口内
+    // 用视觉球尺寸做菜单定位，避免透明边距导致菜单偏远
+    let visual_ball_size = {
+        let b = *BALL_SIZE.lock().unwrap();
+        (b + BALL_PADDING * 2) as i32
+    };
+    // 视觉球在窗口内居中，视觉球的实际边界相对于窗口的偏移
+    let visual_offset_x = (ball_full_width - visual_ball_size) / 2;
+    let visual_offset_y = (ball_full_height - visual_ball_size) / 2;
+    // 基于视觉球的位置和尺寸（而非整个窗口）
+    let visual_ball_x = ball_x + visual_offset_x;
+    let visual_ball_y = ball_y + visual_offset_y;
+
     // Debug info
-    eprintln!("show_menu: scale_factor={}, ball_logical=({}, {}), ball_size=({}, {}), menu_size=({}, {})",
-        scale_factor, ball_x, ball_y, ball_full_width, ball_full_height, menu_width, main_menu_height);
+    eprintln!("show_menu: scale_factor={}, ball_logical=({}, {}), ball_size=({}, {}), visual_ball=({}, {}, {}), menu_size=({}, {})",
+        scale_factor, ball_x, ball_y, ball_full_width, ball_full_height,
+        visual_ball_x, visual_ball_y, visual_ball_size, menu_width, main_menu_height);
 
     // 2. 检测悬浮球位置分类
     let ball_position = detect_ball_position(
-        ball_x,
-        ball_y,
-        ball_full_width,
-        ball_full_height,
+        visual_ball_x,
+        visual_ball_y,
+        visual_ball_size,
+        visual_ball_size,
         screen_width,
         screen_height,
     );
 
     // 3. 计算菜单定位策略（采用Electron版本的智能逻辑）
     let (menu_position, menu_alignment) = calculate_menu_strategy(
-        ball_x,
-        ball_y,
-        ball_full_width,
-        ball_full_height,
+        visual_ball_x,
+        visual_ball_y,
+        visual_ball_size,
+        visual_ball_size,
         screen_width,
         screen_height,
         main_menu_height,
@@ -1129,10 +1307,10 @@ fn show_menu(app: tauri::AppHandle) {
 
     // 4. 计算菜单具体位置
     let (final_x, final_y) = calculate_menu_position(
-        ball_x,
-        ball_y,
-        ball_full_width,
-        ball_full_height,
+        visual_ball_x,
+        visual_ball_y,
+        visual_ball_size,
+        visual_ball_size,
         menu_width,
         main_menu_height,
         screen_width,
@@ -1154,30 +1332,49 @@ fn show_menu(app: tauri::AppHandle) {
         state.menu_alignment = menu_alignment;
     }
 
-    // 5.5 发送子菜单展开方向给前端
-    let submenu_direction = if menu_alignment == MenuAlignment::RightAlign {
-        "left"
-    } else {
-        "right"
+    // 5.5 计算子菜单展开方向
+    let opens_left = menu_alignment == MenuAlignment::RightAlign;
+    let submenu_direction = if opens_left { "left" } else { "right" };
+
+    // 初始窗口宽度只容纳主菜单（192px）
+    // direction=left 时，窗口右对齐球体右边缘：initial_x = final_x + (436 - 192) = final_x + 244
+    let initial_menu_x = if opens_left { final_x + 244 } else { final_x };
+    let initial_menu_y = final_y;
+
+    // 存入 DOCK_STATE 供 menu_expand / menu_collapse 使用
+    {
+        let mut state = DOCK_STATE.lock().unwrap();
+        state.menu_window_x = initial_menu_x;
+        state.menu_window_y = initial_menu_y;
+        state.submenu_opens_left = opens_left;
+    }
+
+    // 6. 复用已有菜单窗口（navigate 刷新内容）或新建
+    let menu_window = {
+        let new_url = tauri::Url::parse(&build_menu_url(&app, submenu_direction)).unwrap();
+        let windows = app.webview_windows();
+        if let Some(existing) = windows.get("menu") {
+            let _ = existing.navigate(new_url);
+            existing.clone()
+        } else {
+            match create_menu_window(&app, submenu_direction) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("show_menu: 创建菜单窗口失败: {}", e);
+                    return;
+                }
+            }
+        }
     };
-    let _ = menu_window.emit("submenu-direction", serde_json::json!({ "direction": submenu_direction }));
 
-    // 6. 设置菜单窗口大小和位置，然后显示
-    let _ = menu_window.hide();
-    std::thread::sleep(std::time::Duration::from_millis(1));
-
-    // 设置窗口大小为主菜单大小（436x116）
     let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
-        width: 436.0,
+        width: 192.0,
         height: 116.0,
     }));
-
     let _ = menu_window.set_position(Position::Logical(LogicalPosition {
-        x: final_x as f64,
-        y: final_y as f64,
+        x: initial_menu_x as f64,
+        y: initial_menu_y as f64,
     }));
-    std::thread::sleep(std::time::Duration::from_millis(5));
-
     let _ = menu_window.show();
 }
 
@@ -1528,7 +1725,7 @@ pub fn run() {
                     });
                 }
 
-                // Position main window at right-center-bottom
+                // Position main window at center
                 if let Some(window) = app.webview_windows().get("main") {
                     // 禁用窗口阴影，避免灰色边框
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1537,10 +1734,12 @@ pub fn run() {
                     }
                     if let Some(monitor) = window.current_monitor().ok().flatten() {
                         let screen_size = monitor.size();
+                        let scale = monitor.scale_factor();
                         let ball_size = *BALL_SIZE.lock().unwrap();
                         let size = ball_size + BALL_PADDING * 2;
-                        let initial_x = screen_size.width as i32 - size as i32 - 50;
-                        let initial_y = (screen_size.height as f32 * 0.65) as i32;
+                        // 居中：屏幕中心
+                        let initial_x = ((screen_size.width as f64 - size as f64 * scale) / 2.0) as i32;
+                        let initial_y = ((screen_size.height as f64 - size as f64 * scale) / 2.0) as i32;
                         let _ = window.set_position(Position::Physical(PhysicalPosition {
                             x: initial_x,
                             y: initial_y,
@@ -1552,6 +1751,7 @@ pub fn run() {
                     let _ = window.show();
                     let _ = window.hide();
                 }
+
             }
             // 注册全局快捷键 Alt+Q：切换悬浮球显示/隐藏
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -1569,6 +1769,16 @@ pub fn run() {
                     }
                 }
             })?;
+
+            // 拦截 optimizer 窗口关闭事件：隐藏而不是销毁
+            if let Some(optimizer_window) = app.get_webview_window("optimizer") {
+                let _ = optimizer_window.clone().on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let _ = optimizer_window.hide();
+                        api.prevent_close();
+                    }
+                });
+            }
 
             Ok(())
         })

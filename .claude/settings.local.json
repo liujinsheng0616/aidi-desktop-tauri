@@ -9,7 +9,28 @@
       "WebFetch(domain:lf-scm-sg.larksuitecdn.com)",
       "WebFetch(domain:lf1-cdn-tos.bytegoofy.com)",
       "WebSearch",
-      "WebFetch(domain:sf3-cn.feishucdn.com)"
+      "WebFetch(domain:sf3-cn.feishucdn.com)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)",
+      "Bash(head:*)",
+      "Bash(find:*)",
+      "Bash(system_profiler:*)",
+      "Bash(/usr/libexec/PlistBuddy:*)",
+      "Bash(python3:*)",
+      "Bash(strings:*)",
+      "Bash(bash:*)",
+      "Bash(MODEL_ID=\"Mac15,7\" PLIST_PATH=\"/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/CoreTypes-0013.bundle/Contents/Info.plist\" python3:*)",
+      "Bash(# 查看 SIMachineAttributes 中 Mac15,7 的完整信息\nfind /System/Library -name \"SIMachineAttributes.plist\" -path \"*en*\" 2>/dev/null | head -1 | xargs /usr/libexec/PlistBuddy -c \"print :Mac16,6\" 2>/dev/null\n# 或查找 Mac15,7\nfind /System/Library -name \"SIMachineAttributes.plist\" -path \"*en*\" 2>/dev/null | head -1 | xargs /usr/libexec/PlistBuddy -c \"print :Mac15,7\" 2>/dev/null)",
+      "Bash(ioreg:*)",
+      "Bash(system_profiler SPHardwareDataType:*)",
+      "Bash(system_profiler SPAppleCareDataType:*)",
+      "Bash(echo year: [$year]:*)",
+      "Bash(sysctl:*)",
+      "Bash(plutil:*)",
+      "Bash(./system-info.sh:*)",
+      "Bash(npx tauri:*)",
+      "Bash(ls:*)"
     ]
   }
 }

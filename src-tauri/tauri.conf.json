@@ -28,20 +28,6 @@
         "acceptFirstMouse": true
       },
       {
-        "label": "menu",
-        "title": "Menu",
-        "url": "menu.html",
-        "width": 436,
-        "height": 116,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "center": false,
-        "visible": false
-      },
-      {
         "label": "optimizer",
         "title": "系统优化",
         "url": "optimizer.html",

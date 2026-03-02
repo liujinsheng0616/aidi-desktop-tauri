@@ -16,10 +16,10 @@ export interface UserInfo {
 export async function fetchUserIdByCode(code: string): Promise<string> {
   const appId = import.meta.env.VITE_FS_APPID
   const baseUrl = import.meta.env.VITE_API_BASE_URL
-  const res = await fetch(`${baseUrl}/api-crop/feishu/authorize/${code}/${appId}`)
+  const params = new URLSearchParams({ code, appId })
+  const res = await fetch(`${baseUrl}/api-uaa/oauth/feishu/employee/authorize?${params}`)
   if (!res.ok) throw new Error('获取授权信息失败，请联系管理员')
   const data = await res.json()
-  if (data.resp_code !== 0) throw new Error('获取授权信息失败，请联系管理员')
   const userId = data.userId ?? data.data?.userId
   if (!userId) throw new Error('获取授权信息失败，请联系管理员')
   return userId

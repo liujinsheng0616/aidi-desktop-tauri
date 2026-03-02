@@ -10,6 +10,13 @@ $ErrorActionPreference = "SilentlyContinue"
 # OS Info
 $os = Get-CimInstance Win32_OperatingSystem
 $cs = Get-CimInstance Win32_ComputerSystem
+$bios = Get-CimInstance Win32_BIOS
+
+# Network Info - Get local IPv4 address
+$localIP = ""
+Get-NetIPAddressConfiguration | Where-Object { $_.AddressFamily -eq "IPv4" -and $_.IPAddress -notlike "127.*" } | Select-Object -First 1 | ForEach-Object {
+    $localIP = $_.IPAddress
+}
 
 # CPU Info
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -33,8 +40,11 @@ $output = @{
     summary = "$($cs.Manufacturer) $($cs.Model)"
     details = @{
         hostname = $cs.Name
+        ip = $localIP
         manufacturer = $cs.Manufacturer
         model = $cs.Model
+        serialNumber = $bios.SerialNumber
+        manufactureDate = if ($bios.ReleaseDate) { "$($bios.ReleaseDate.Year)年$($bios.ReleaseDate.Month)月" } else { "Unknown" }
         os = @{
             name = $os.Caption
             version = $os.Version

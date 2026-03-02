@@ -1,6 +1,7 @@
 import { ref, reactive, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os'
+import { getUser, fetchWithAuth } from './auth'
 
 export type Status = 'good' | 'warning' | 'danger' | 'error' | 'info' | 'scanning'
 
@@ -92,8 +93,11 @@ export interface HealthDetails {
 
 export interface SystemDetails {
   hostname: string
+  ip?: string
   manufacturer: string
   model: string
+  serialNumber: string
+  manufactureDate: string
   os: {
     name: string
     version: string
@@ -157,6 +161,7 @@ const scanStatus = ref('')
 const lastScanTime = ref<string | null>(null)
 const results = ref<ScanResult[]>([])
 const error = ref<string | null>(null)
+const deviceReported = ref(false)  // 设备信息是否已上报
 
 // Platform detection using Tauri OS plugin
 const isMac = ref(false)
@@ -200,6 +205,7 @@ async function scanAll() {
   scanProgress.value = 5  // Start at 5% immediately to show activity
   scanStatus.value = '正在扫描...'
   error.value = null
+  deviceReported.value = false
 
   try {
     // Map step keys to Tauri command names
@@ -244,6 +250,12 @@ async function scanAll() {
     scanStatus.value = '扫描完成'
     results.value = scanResults
     lastScanTime.value = new Date().toLocaleString()
+
+    // 上报设备信息（不阻断扫描流程）
+    const systemRes = scanResults.find(r => r.dimension === 'system')
+    if (systemRes && systemRes.status !== 'error') {
+      reportDeviceInfo(systemRes.details as SystemDetails)
+    }
   } catch (e: any) {
     error.value = e.message
   } finally {
@@ -393,6 +405,43 @@ function isStartupItemSelected(item: StartupItem): boolean {
   )
 }
 
+// 上报设备信息到 aigc-server（忽略错误，不阻断扫描流程）
+async function reportDeviceInfo(systemInfo: SystemDetails) {
+  try {
+    const user = getUser()
+    if (!user) return
+    const payload = {
+      userCode: user.fsUserId,
+      userName: user.name,
+      hostname: systemInfo.hostname,
+      ip: systemInfo.ip || '',
+      manufacturer: systemInfo.manufacturer,
+      model: systemInfo.model,
+      serialNumber: systemInfo.serialNumber,
+      manufactureDate: systemInfo.manufactureDate,
+      osName: systemInfo.os.name,
+      osVersion: systemInfo.os.version,
+      osArch: systemInfo.os.architecture,
+      osInstallDate: systemInfo.os.installDate,
+      osLastBoot: systemInfo.os.lastBoot,
+      cpuName: systemInfo.cpu.name,
+      cpuCores: systemInfo.cpu.cores,
+      memoryGb: systemInfo.memory.totalGB,
+      storageGb: systemInfo.storage.totalGB,
+      gpuName: systemInfo.gpu.name,
+    }
+    await fetchWithAuth('/api-aigc/device/info/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    deviceReported.value = true
+  } catch (e) {
+    console.warn('Device info report failed:', e)
+    deviceReported.value = false
+  }
+}
+
 // Export composable
 export function useOptimizer() {
   return {
@@ -405,6 +454,7 @@ export function useOptimizer() {
     results,
     error,
     lastOptimizeResult,
+    deviceReported,
 
     // Optimization selections
     optimizeSelections,

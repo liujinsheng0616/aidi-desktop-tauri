@@ -257,8 +257,8 @@ onUnmounted(() => {
   <div
     class="floating-ball"
     :style="{
-      width: `${ballSize}px`,
-      height: `${ballSize}px`,
+      width: '100%',
+      height: '100%',
       opacity: ballOpacity
     }"
     @mousedown="handleMouseDown"
@@ -300,6 +300,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   overflow: visible;
+  pointer-events: auto;   /* 父容器穿透后，球体恢复响应鼠标事件 */
 }
 
 /* 内部内容容器 - 固定 60px 基准尺寸 */
@@ -308,6 +309,7 @@ onUnmounted(() => {
   width: 60px;
   height: 60px;
   flex-shrink: 0;
+  transform-origin: center center;
 }
 
 .floating-ball:active {
