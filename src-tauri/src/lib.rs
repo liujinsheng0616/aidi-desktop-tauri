@@ -1109,6 +1109,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                         "hide_main_window",
                         "show_login_window",
                         "hide_login_window",
+                        "show_menu_window",
                         "menu_expand",
                         "menu_collapse",
                         "update_settings",
@@ -1138,6 +1139,11 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                 "hide_login_window" => {
                                     if let Some(w) = app2.webview_windows().get("login") {
                                         let _ = w.hide();
+                                    }
+                                }
+                                "show_menu_window" => {
+                                    if let Some(w) = app2.webview_windows().get("menu") {
+                                        let _ = w.show();
                                     }
                                 }
                                 "menu_expand" => {
@@ -1382,7 +1388,7 @@ fn show_menu(app: tauri::AppHandle) {
         }
     };
 
-    // 显示窗口（大小和位置已在 navigate 之前设置）
+    // 显示窗口
     let _ = menu_window.show();
 }
 
