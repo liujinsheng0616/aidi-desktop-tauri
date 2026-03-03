@@ -48,7 +48,7 @@
         "url": "login.html",
         "width": 360,
         "height": 420,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
         "shadow": true,
         "alwaysOnTop": true,

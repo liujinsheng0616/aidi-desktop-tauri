@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { emitTo } from '@tauri-apps/api/event'
 import { fetchUserIdByCode, fetchTokenByUserId, fetchCurrentUser, setToken, setUser } from '../stores/auth'
-import aidiIcon from '../assets/aidi-icon.svg'
 
 type Status = 'qr' | 'processing' | 'success' | 'error'
 
@@ -17,10 +15,6 @@ const redirectUri = encodeURIComponent(import.meta.env.VITE_FS_REDIRECT_URI as s
 const gotoUrl = `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=FS`
 
 const qrIframeSrc = `https://passport.feishu.cn/suite/passport/sso/qr?goto=${encodeURIComponent(gotoUrl)}`
-
-function closeWindow() {
-  invoke('close_login_window')
-}
 
 function retryLogin() {
   window.location.href = '/login.html'
@@ -82,23 +76,6 @@ onUnmounted(() => {
 
 <template>
   <div class="login-page" data-tauri-drag-region>
-    <!-- 标题栏 -->
-    <div class="titlebar" data-tauri-drag-region>
-      <div class="titlebar-left" data-tauri-drag-region>
-        <img :src="aidiIcon" class="tbar-logo" alt="AIDI" />
-        <span class="tbar-title" data-tauri-drag-region>AIDI 桌面版</span>
-      </div>
-      <button class="close-btn" @click.stop="closeWindow" title="关闭">
-        <svg viewBox="0 0 10 10" fill="currentColor">
-          <circle cx="5" cy="5" r="5" />
-        </svg>
-        <svg class="close-x" viewBox="0 0 10 10" fill="none" stroke="#7a0000" stroke-width="1.4">
-          <line x1="2.5" y1="2.5" x2="7.5" y2="7.5" />
-          <line x1="7.5" y1="2.5" x2="2.5" y2="7.5" />
-        </svg>
-      </button>
-    </div>
-
     <!-- 二维码模式 -->
     <div v-if="status === 'qr'" class="body" data-tauri-drag-region>
       <h1 class="title" data-tauri-drag-region>扫码登录</h1>
@@ -160,76 +137,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background: #fff;
-  border-radius: 12px;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
-}
-
-/* ── 标题栏 ── */
-.titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px 0 14px;
-  height: 44px;
-  flex-shrink: 0;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.titlebar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tbar-logo {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  pointer-events: none;
-}
-
-.tbar-title {
-  color: #333;
-  font-size: 13px;
-  font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  pointer-events: none;
-}
-
-/* macOS 风格关闭按钮 */
-.close-btn {
-  position: relative;
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.close-btn > svg:first-child {
-  width: 14px;
-  height: 14px;
-  color: #ff5f57;
-  display: block;
-}
-
-.close-x {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  opacity: 0;
-  transition: opacity 0.1s;
-}
-
-.close-btn:hover .close-x {
-  opacity: 1;
 }
 
 /* ── 主体 ── */
@@ -240,7 +150,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 24px 24px;
+  padding: 24px;
 }
 
 .title {

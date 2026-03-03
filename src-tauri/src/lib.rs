@@ -1,5 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(unexpected_cfgs)]
+#![allow(deprecated)]
 
 mod report_worker;
 
@@ -1790,6 +1792,13 @@ fn show_login_window(app: tauri::AppHandle) {
     if let Some(w) = app.webview_windows().get("login") {
         let _ = w.center();
         let _ = w.show();
+        #[cfg(target_os = "windows")]
+        {
+            // Windows 上强制刷新窗口：先调整大小再恢复
+            use tauri::{LogicalSize, Size};
+            let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+            let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+        }
         let _ = w.set_focus();
     }
 }
