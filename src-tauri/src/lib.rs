@@ -248,7 +248,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
             let hwnd = HWND(hwnd.0);
             unsafe {
                 let hrgn = CreateEllipticRgn(0, 0, size as i32, size as i32);
-                SetWindowRgn(hwnd, hrgn, true);
+                SetWindowRgn(hwnd, Some(hrgn), true);
             }
         }
     }
