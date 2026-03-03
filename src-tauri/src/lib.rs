@@ -218,6 +218,42 @@ fn ease_out_cubic(t: f32) -> f32 {
     1.0 - t_inv * t_inv * t_inv
 }
 
+/// 设置窗口为圆形
+fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::base::{id, nil, YES};
+        use objc::{msg_send, sel, sel_impl};
+
+        if let Ok(ns_window) = window.ns_window() {
+            let ns_window = ns_window as id;
+            unsafe {
+                let content_view: id = msg_send![ns_window, contentView];
+                let _: () = msg_send![content_view, setWantsLayer: YES];
+                let layer: id = msg_send![content_view, layer];
+                if layer != nil {
+                    let _: () = msg_send![layer, setCornerRadius: (size / 2) as f64];
+                    let _: () = msg_send![layer, setMasksToBounds: YES];
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
+        use windows::Win32::Foundation::HWND;
+
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = HWND(hwnd.0);
+            unsafe {
+                let hrgn = CreateEllipticRgn(0, 0, size as i32, size as i32);
+                SetWindowRgn(hwnd, hrgn, true);
+            }
+        }
+    }
+}
+
 // Animate window to target position with easing
 fn animate_to_position(
     window: &tauri::WebviewWindow,
@@ -1503,6 +1539,9 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
             height: full_size as f64,
         }));
 
+        // 设置窗口为圆形
+        apply_circular_window_mask(&main_window, full_size);
+
         // 同步更新内部状态
         let mut ball_size = BALL_SIZE.lock().unwrap();
         *ball_size = actual_size;
@@ -1813,6 +1852,10 @@ pub fn run() {
                     {
                         let _ = window.set_shadow(false);
                     }
+                    // 设置窗口为圆形
+                    let ball_size = *BALL_SIZE.lock().unwrap();
+                    let full_size = ball_size + BALL_PADDING * 2;
+                    apply_circular_window_mask(&window, full_size);
                     if let Some(monitor) = window.current_monitor().ok().flatten() {
                         let screen_size = monitor.size();
                         let scale = monitor.scale_factor();

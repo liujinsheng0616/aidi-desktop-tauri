@@ -20,6 +20,9 @@ const colorThemes: Record<string, { primary: string; glow: string }> = {
   'midnight': { primary: '#1a1a1a', glow: 'rgba(50, 50, 50, 0.4)' },
 }
 
+// 判断是否为开发模式
+const isDev = import.meta.env.DEV
+
 // 使用设计规范中的 120px 作为基准尺寸
 const ballSize = computed(() => props.size || 60)
 const ballOpacity = computed(() => (props.opacity ?? 100) / 100)
@@ -44,12 +47,23 @@ let hoverTimeout: number | null = null
 let hideDockTimeout: number | null = null
 let hoverVersion = 0
 
+// 右键菜单处理 - 开发模式下保留默认行为以支持 Inspect
+function handleContextMenu(e: MouseEvent) {
+  if (!isDev) {
+    e.preventDefault()
+    // 自定义菜单在 handleMouseDown 中已处理
+  }
+  // 开发模式下不阻止默认行为，允许打开 DevTools
+}
+
 // 鼠标按下 - 开始拖拽
 async function handleMouseDown(e: MouseEvent) {
-  // 右键显示菜单
+  // 右键显示菜单（仅生产模式）
   if (e.button === 2) {
-    e.preventDefault()
-    invoke('show_menu')
+    if (!isDev) {
+      e.preventDefault()
+      invoke('show_menu')
+    }
     return
   }
 
@@ -264,7 +278,7 @@ onUnmounted(() => {
     @mousedown="handleMouseDown"
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
-    @contextmenu.prevent
+    @contextmenu="handleContextMenu"
   >
     <div class="ball-content" :style="{ transform: `scale(${ballScale})` }">
       <!-- 外圈光环 - 呼吸动画 -->
