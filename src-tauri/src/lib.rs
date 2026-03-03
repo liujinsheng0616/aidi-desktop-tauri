@@ -1583,13 +1583,17 @@ fn get_script_path(script_name: &str) -> std::path::PathBuf {
 /// Execute a script and return its output as JSON
 #[cfg(target_os = "windows")]
 fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let script_path = get_script_path(script_name);
     let script_path_str = script_path.to_string_lossy().to_string();
 
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("Failed to execute script: {}", e))?;
 
@@ -1606,13 +1610,17 @@ fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
 /// Execute a script with arguments and return its output as JSON
 #[cfg(target_os = "windows")]
 fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Value, String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let script_path = get_script_path(script_name);
     let script_path_str = script_path.to_string_lossy().to_string();
 
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str, args])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("Failed to execute script: {}", e))?;
 
