@@ -21,12 +21,35 @@ function loadSettings() {
   }
 }
 
+/** 同步认证信息到 Rust 后端（用于后台静默上报） */
+async function syncAuthToBackend() {
+  const token = getToken()
+  const user = getUser()
+  if (token && user) {
+    try {
+      // 同步 token
+      await invoke('set_auth_token', { token })
+      // 同步用户信息（userCode 使用 fsUserId）
+      await invoke('set_report_user_info', {
+        userCode: user.fsUserId || user.id,
+        userName: user.name || user.nickName
+      })
+    } catch (e) {
+      console.error('同步认证信息到后端失败:', e)
+    }
+  }
+}
+
 async function initApp() {
   loadSettings()
   // 每次启动悬浮球时刷新用户信息缓存，失败不阻断启动
   const token = getToken()
   if (token) {
-    fetchCurrentUser(token).then(setUser).catch(() => {})
+    fetchCurrentUser(token).then(async (user) => {
+      setUser(user)
+      // 同步认证信息到 Rust 后端
+      await syncAuthToBackend()
+    }).catch(() => {})
   }
   // 先同步窗口大小，消除 tauri.conf.json 初始 120×120 与 ballSize 的不一致
   await invoke('update_window_size', { size: ballSize.value })
@@ -49,6 +72,8 @@ onMounted(async () => {
   listen('login-complete', async () => {
     await invoke('close_login_window')
     await initApp()
+    // 登录完成后同步认证信息到后端
+    await syncAuthToBackend()
   })
 
   // 监听托盘"打开AIDI"事件

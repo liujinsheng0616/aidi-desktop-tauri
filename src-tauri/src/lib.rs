@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod report_worker;
+
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -42,9 +44,10 @@ fn get_external_url_base(_app: &AppHandle) -> String {
 }
 
 /// 构建菜单页面的完整 URL
+/// 注意：Vue Router 使用 Hash 模式，所以路径需要加 # 前缀
 fn build_menu_url(app: &AppHandle, direction: &str) -> String {
     let base_url = get_external_url_base(app);
-    format!("{}/menu?direction={}", base_url, direction)
+    format!("{}/#/menu?direction={}", base_url, direction)
 }
 
 // ==================== POSITION DETECTION SYSTEM ====================
@@ -1081,7 +1084,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     );
     tauri::WebviewWindowBuilder::new(app, "menu", menu_url)
         .title("Menu")
-        .inner_size(192.0, 116.0)
+        .inner_size(184.0, 116.0)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -1144,14 +1147,14 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                             (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
                                         };
                                         if opens_left {
-                                            // 向左展开：窗口 x 左移244，宽度扩至436
+                                            // 向左展开：窗口 x 左移244，宽度扩至428
                                             let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
                                                 x: (init_x - 244) as f64,
                                                 y: init_y as f64,
                                             }));
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                                            width: 436.0,
+                                            width: 428.0,
                                             height: 360.0,
                                         }));
                                     }
@@ -1163,14 +1166,14 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                             (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
                                         };
                                         if opens_left {
-                                            // 收起：恢复初始 x，宽度缩回192
+                                            // 收起：恢复初始 x，宽度缩回184
                                             let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
                                                 x: init_x as f64,
                                                 y: init_y as f64,
                                             }));
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                                            width: 192.0,
+                                            width: 184.0,
                                             height: 116.0,
                                         }));
                                     }
@@ -1248,8 +1251,9 @@ fn show_menu(app: tauri::AppHandle) {
     let screen_width = (screen_size.width as f64 / scale_factor) as i32;
     let screen_height = (screen_size.height as f64 / scale_factor) as i32;
 
-    // 菜单窗口固定宽度 436（不依赖已存在的窗口实例）
-    let menu_width: i32 = 436;
+    // 菜单尺寸常量
+    let initial_menu_width: i32 = 184;   // 初始主菜单宽度
+    let _expanded_menu_width: i32 = 428;  // 展开后总宽度（184 + 244）
     // 使用主菜单的实际高度（约100px），而不是窗口高度（380px）
     // 因为菜单位置计算应该基于主菜单，而不是整个窗口
     let main_menu_height: i32 = 100;
@@ -1281,7 +1285,7 @@ fn show_menu(app: tauri::AppHandle) {
     // Debug info
     eprintln!("show_menu: scale_factor={}, ball_logical=({}, {}), ball_size=({}, {}), visual_ball=({}, {}, {}), menu_size=({}, {})",
         scale_factor, ball_x, ball_y, ball_full_width, ball_full_height,
-        visual_ball_x, visual_ball_y, visual_ball_size, menu_width, main_menu_height);
+        visual_ball_x, visual_ball_y, visual_ball_size, initial_menu_width, main_menu_height);
 
     // 2. 检测悬浮球位置分类
     let ball_position = detect_ball_position(
@@ -1305,13 +1309,13 @@ fn show_menu(app: tauri::AppHandle) {
         menu_gap,
     );
 
-    // 4. 计算菜单具体位置
+    // 4. 计算菜单具体位置（使用初始主菜单宽度 184px）
     let (final_x, final_y) = calculate_menu_position(
         visual_ball_x,
         visual_ball_y,
         visual_ball_size,
         visual_ball_size,
-        menu_width,
+        initial_menu_width,
         main_menu_height,
         screen_width,
         screen_height,
@@ -1336,9 +1340,9 @@ fn show_menu(app: tauri::AppHandle) {
     let opens_left = menu_alignment == MenuAlignment::RightAlign;
     let submenu_direction = if opens_left { "left" } else { "right" };
 
-    // 初始窗口宽度只容纳主菜单（192px）
-    // direction=left 时，窗口右对齐球体右边缘：initial_x = final_x + (436 - 192) = final_x + 244
-    let initial_menu_x = if opens_left { final_x + 244 } else { final_x };
+    // 初始窗口宽度只容纳主菜单（184px）
+    // final_x 已经是基于 184px 宽度计算的右对齐位置，直接使用即可
+    let initial_menu_x = final_x;
     let initial_menu_y = final_y;
 
     // 存入 DOCK_STATE 供 menu_expand / menu_collapse 使用
@@ -1354,6 +1358,17 @@ fn show_menu(app: tauri::AppHandle) {
         let new_url = tauri::Url::parse(&build_menu_url(&app, submenu_direction)).unwrap();
         let windows = app.webview_windows();
         if let Some(existing) = windows.get("menu") {
+            // 先隐藏窗口，避免导航时的闪烁
+            let _ = existing.hide();
+            // 在导航之前先设置窗口大小为主菜单尺寸，避免页面在错误尺寸下渲染
+            let _ = existing.set_size(Size::Logical(tauri::LogicalSize {
+                width: 184.0,
+                height: 116.0,
+            }));
+            let _ = existing.set_position(Position::Logical(LogicalPosition {
+                x: initial_menu_x as f64,
+                y: initial_menu_y as f64,
+            }));
             let _ = existing.navigate(new_url);
             existing.clone()
         } else {
@@ -1367,14 +1382,7 @@ fn show_menu(app: tauri::AppHandle) {
         }
     };
 
-    let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
-        width: 192.0,
-        height: 116.0,
-    }));
-    let _ = menu_window.set_position(Position::Logical(LogicalPosition {
-        x: initial_menu_x as f64,
-        y: initial_menu_y as f64,
-    }));
+    // 显示窗口（大小和位置已在 navigate 之前设置）
     let _ = menu_window.show();
 }
 
@@ -1393,7 +1401,54 @@ fn hide_menu(app: tauri::AppHandle) {
     if let Some(menu_window) = windows.get("menu") {
         // 发送菜单隐藏事件，让前端重置子菜单状态
         let _ = menu_window.emit("menu-hidden", ());
+        // 重置窗口大小为主菜单尺寸，避免下次显示时出现抖动
+        let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
+            width: 184.0,
+            height: 116.0,
+        }));
         let _ = menu_window.hide();
+    }
+}
+
+#[tauri::command]
+fn menu_expand(app: tauri::AppHandle) {
+    if let Some(w) = app.webview_windows().get("menu") {
+        let (init_x, init_y, opens_left) = {
+            let s = DOCK_STATE.lock().unwrap();
+            (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
+        };
+        if opens_left {
+            // 向左展开：窗口 x 左移244，宽度扩至428
+            let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: (init_x - 244) as f64,
+                y: init_y as f64,
+            }));
+        }
+        let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 428.0,
+            height: 360.0,
+        }));
+    }
+}
+
+#[tauri::command]
+fn menu_collapse(app: tauri::AppHandle) {
+    if let Some(w) = app.webview_windows().get("menu") {
+        let (init_x, init_y, opens_left) = {
+            let s = DOCK_STATE.lock().unwrap();
+            (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
+        };
+        if opens_left {
+            // 收起：恢复初始 x，宽度缩回184
+            let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: init_x as f64,
+                y: init_y as f64,
+            }));
+        }
+        let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 184.0,
+            height: 116.0,
+        }));
     }
 }
 
@@ -1408,6 +1463,26 @@ fn update_settings(app: tauri::AppHandle, settings: Settings) {
     }
 
     let _ = app.emit("settings-updated", settings);
+}
+
+/// 设置上报认证 Token（供前端调用）
+#[tauri::command]
+fn set_auth_token(token: String) {
+    report_worker::set_auth_token(token);
+}
+
+/// 设置上报用户信息（供前端调用）
+#[tauri::command]
+fn set_report_user_info(user_code: String, user_name: String) {
+    report_worker::set_user_info(user_code, user_name);
+    println!("[ReportWorker] 认证信息已设置");
+}
+
+/// 手动触发一次上报
+#[tauri::command]
+async fn trigger_report(app: tauri::AppHandle) -> Result<String, String> {
+    report_worker::trigger_report_now(&app).await?;
+    Ok("上报成功".to_string())
 }
 
 #[tauri::command]
@@ -1780,6 +1855,9 @@ pub fn run() {
                 });
             }
 
+            // 启动守护线程
+            report_worker::start_report_worker(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1795,7 +1873,12 @@ pub fn run() {
             ball_leave,
             menu_enter,
             menu_leave,
+            menu_expand,
+            menu_collapse,
             update_settings,
+            set_auth_token,
+            set_report_user_info,
+            trigger_report,
             update_window_size,
             start_drag,
             move_window_by,

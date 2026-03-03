@@ -8,8 +8,12 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "vite",
-    "tauri:build": "vite build && tauri build"
+    "tauri:dev": "tauri dev",
+    "tauri:test": "AIDI_ENV=test tauri dev",
+    "tauri:prod": "AIDI_ENV=prod tauri dev",
+    "tauri:build": "vite build && tauri build",
+    "tauri:build:test": "AIDI_ENV=test vite build && tauri build",
+    "tauri:build:prod": "AIDI_ENV=prod vite build && tauri build"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",

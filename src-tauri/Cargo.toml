@@ -23,6 +23,8 @@ sysinfo = "0.32"
 walkdir = "2"
 dirs = "5"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.11", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.59", features = [
