@@ -20,11 +20,10 @@ use std::sync::OnceLock;
 
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 
-/// 初始化日志文件
-fn init_log_file(app: &AppHandle) {
-    if let Ok(app_dir) = app.path().app_data_dir() {
-        let _ = std::fs::create_dir_all(&app_dir);
-        let log_path = app_dir.join("aidi-debug.log");
+/// 初始化日志文件（输出到桌面）
+fn init_log_file() {
+    if let Some(desktop) = dirs::desktop_dir() {
+        let log_path = desktop.join("aidi-debug.log");
         if let Ok(file) = OpenOptions::new()
             .create(true)
             .append(true)
@@ -1902,8 +1901,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                // 初始化日志文件
-                init_log_file(app.handle());
+                // 初始化日志文件（输出到桌面）
+                init_log_file();
                 log_msg("应用 setup 开始");
 
                 // 创建菜单栏 tray icon
