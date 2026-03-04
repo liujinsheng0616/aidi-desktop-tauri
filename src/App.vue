@@ -71,6 +71,8 @@ onMounted(async () => {
   // 监听登录完成事件
   listen('login-complete', async () => {
     await invoke('close_login_window')
+    // 登录成功后更新托盘菜单状态
+    await invoke('update_login_status', { isLoggedIn: true })
     await initApp()
     // 登录完成后同步认证信息到后端
     await syncAuthToBackend()
@@ -101,7 +103,11 @@ onMounted(async () => {
     }
   })
 
-  if (isLoggedIn()) {
+  const loggedIn = isLoggedIn()
+  // 应用启动时同步登录状态到 Rust 端（用于托盘菜单显示）
+  await invoke('update_login_status', { isLoggedIn: loggedIn })
+
+  if (loggedIn) {
     await initApp()
   } else {
     await invoke('show_login_window')

@@ -5,12 +5,17 @@
 
 mod report_worker;
 
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, Position, Size};
 use tauri::tray::TrayIconBuilder;
 use tauri::menu::{Menu, MenuItem};
+
+// ==================== GLOBAL LOGIN STATUS ====================
+
+/// 全局登录状态（用于动态切换托盘菜单）
+static IS_LOGGED_IN: AtomicBool = AtomicBool::new(false);
 
 // ==================== DATA STRUCTURES ====================
 
@@ -519,20 +524,39 @@ fn hide_main_window(app: tauri::AppHandle, window: tauri::Window) {
     sync_toggle_menu_item(&app, false);
 }
 
-/// 同步 Tray 菜单"显示/隐藏浮动球"文字（重建菜单并 set_menu）
-fn sync_toggle_menu_item(app: &tauri::AppHandle, visible: bool) {
+/// 根据登录状态重建托盘菜单
+/// - 未登录：只显示"登录"选项
+/// - 已登录：显示"打开AIDI"、"显示/隐藏浮动球"、"退出"
+fn rebuild_tray_menu(app: &tauri::AppHandle, is_logged_in: bool, ball_visible: bool) {
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let label = if visible { "隐藏浮动球" } else { "显示浮动球" };
-        if let (Ok(toggle_item), Ok(aigc_item), Ok(quit_item)) = (
-            MenuItem::with_id(app, "toggle", label, true, None::<&str>),
-            MenuItem::with_id(app, "aigc", "打开AIDI", true, None::<&str>),
-            MenuItem::with_id(app, "quit", "退出", true, None::<&str>),
-        ) {
-            if let Ok(menu) = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item]) {
-                let _ = tray.set_menu(Some(menu));
+        if is_logged_in {
+            // 已登录菜单：打开AIDI、显示/隐藏浮动球、退出
+            let toggle_label = if ball_visible { "隐藏浮动球" } else { "显示浮动球" };
+            if let (Ok(toggle_item), Ok(aigc_item), Ok(quit_item)) = (
+                MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>),
+                MenuItem::with_id(app, "aigc", "打开AIDI", true, None::<&str>),
+                MenuItem::with_id(app, "quit", "退出", true, None::<&str>),
+            ) {
+                if let Ok(menu) = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item]) {
+                    let _ = tray.set_menu(Some(menu));
+                }
+            }
+        } else {
+            // 未登录菜单：只有登录
+            if let Ok(login_item) = MenuItem::with_id(app, "login", "登录", true, None::<&str>) {
+                if let Ok(menu) = Menu::with_items(app, &[&login_item]) {
+                    let _ = tray.set_menu(Some(menu));
+                }
             }
         }
     }
+}
+
+/// 同步 Tray 菜单"显示/隐藏浮动球"文字（重建菜单并 set_menu）
+/// 兼容旧调用，内部调用 rebuild_tray_menu
+fn sync_toggle_menu_item(app: &tauri::AppHandle, visible: bool) {
+    let is_logged_in = IS_LOGGED_IN.load(Ordering::SeqCst);
+    rebuild_tray_menu(app, is_logged_in, visible);
 }
 
 #[tauri::command]
@@ -1810,6 +1834,22 @@ fn close_login_window(app: tauri::AppHandle) {
     }
 }
 
+/// 更新登录状态并重建托盘菜单
+/// 前端登录成功后调用此命令同步状态
+#[tauri::command]
+fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
+    IS_LOGGED_IN.store(is_logged_in, Ordering::SeqCst);
+
+    // 获取当前浮动球可见性
+    let ball_visible = if let Some(w) = app.webview_windows().get("main") {
+        w.is_visible().unwrap_or(false)
+    } else {
+        false
+    };
+
+    rebuild_tray_menu(&app, is_logged_in, ball_visible);
+}
+
 // ==================== MAIN ENTRY POINT ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1839,6 +1879,20 @@ pub fn run() {
 
                     // 全局菜单事件监听（菜单重建后依然有效）
                     app.on_menu_event(|app, event| match event.id.as_ref() {
+                        "login" => {
+                            // 显示登录窗口
+                            if let Some(w) = app.webview_windows().get("login") {
+                                let _ = w.center();
+                                let _ = w.show();
+                                #[cfg(target_os = "windows")]
+                                {
+                                    use tauri::{LogicalSize, Size};
+                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                                }
+                                let _ = w.set_focus();
+                            }
+                        }
                         "toggle" => {
                             if let Some(w) = app.get_webview_window("main") {
                                 let visible = w.is_visible().unwrap_or(false);
@@ -1921,6 +1975,16 @@ pub fn run() {
                 });
             }
 
+            // 拦截 login 窗口关闭事件：隐藏而不是销毁
+            if let Some(login_window) = app.get_webview_window("login") {
+                let _ = login_window.clone().on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let _ = login_window.hide();
+                        api.prevent_close();
+                    }
+                });
+            }
+
             // 启动守护线程
             report_worker::start_report_worker(app.handle().clone());
 
@@ -1966,6 +2030,7 @@ pub fn run() {
             optimizer_disk_clean,
             show_login_window,
             close_login_window,
+            update_login_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
