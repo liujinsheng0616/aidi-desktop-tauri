@@ -207,7 +207,8 @@ async function handleMouseUp() {
         const existingWindow = windows.find(w => w.label === 'aigc-window')
 
         const fsUserId = getUser()?.fsUserId ?? ''
-        const aigcUrl = `https://aidi.yadea.com.cn/aigc/#/login?userId=${fsUserId}`
+        const appDomain = import.meta.env.VITE_APP_DOMAIN || 'https://aidi.yadea.com.cn'
+        const aigcUrl = `${appDomain}/aigc/#/login?userId=${fsUserId}`
 
         if (existingWindow) {
           // 窗口已存在，更新 URL 后显示并聚焦

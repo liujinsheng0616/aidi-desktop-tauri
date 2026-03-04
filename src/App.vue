@@ -93,7 +93,8 @@ onMounted(async () => {
   // 监听托盘"打开AIDI"事件
   listen('open-aigc', async () => {
     const fsUserId = getUser()?.fsUserId ?? ''
-    const aigcUrl = `https://aidi.yadea.com.cn/aigc/#/login?userId=${fsUserId}`
+    const appDomain = import.meta.env.VITE_APP_DOMAIN || 'https://aidi.yadea.com.cn'
+    const aigcUrl = `${appDomain}/aigc/#/login?userId=${fsUserId}`
     const windows = await getAllWebviewWindows()
     const existing = windows.find(w => w.label === 'aigc-window')
     if (existing) {
