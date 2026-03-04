@@ -28,14 +28,6 @@ async function logDebug(message: string) {
   }
 }
 
-// 调试日志
-logDebug('[Login] 环境变量调试:')
-logDebug(`  VITE_FS_APPID: ${appId}`)
-logDebug(`  VITE_FS_REDIRECT_URI (原始): ${redirectUriRaw}`)
-logDebug(`  VITE_FS_REDIRECT_URI (编码): ${redirectUri}`)
-logDebug(`  gotoUrl: ${gotoUrl}`)
-logDebug(`  qrIframeSrc: ${qrIframeSrc}`)
-
 let deepLinkUnsubscribe: (() => void) | null = null
 
 function retryLogin() {
@@ -102,9 +94,17 @@ function handleDeepLink(urls: string[]) {
 }
 
 onMounted(async () => {
+  // 输出调试日志到桌面文件
+  await logDebug('[Login] 页面加载，环境变量调试:')
+  await logDebug(`  VITE_FS_APPID: ${appId}`)
+  await logDebug(`  VITE_FS_REDIRECT_URI (原始): ${redirectUriRaw}`)
+  await logDebug(`  gotoUrl: ${gotoUrl}`)
+  await logDebug(`  qrIframeSrc: ${qrIframeSrc}`)
+
   // 开发环境：OAuth 回调页面以 ?code=xxx 重新加载
   const code = new URLSearchParams(window.location.search).get('code')
   if (code) {
+    await logDebug(`[Login] 检测到 code 参数: ${code.substring(0, 10)}...`)
     await handleCode(code)
     return
   }
@@ -112,9 +112,9 @@ onMounted(async () => {
   // 注册 deep link 监听器（生产环境）
   try {
     deepLinkUnsubscribe = await onOpenUrl(handleDeepLink)
-    console.log('[DeepLink] 监听器已注册')
+    await logDebug('[DeepLink] 监听器已注册')
   } catch (e) {
-    console.warn('[DeepLink] 注册失败:', e)
+    await logDebug(`[DeepLink] 注册失败: ${e}`)
   }
 
   // 监听 iframe postMessage（开发环境兜底）
