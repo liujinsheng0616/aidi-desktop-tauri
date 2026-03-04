@@ -92,51 +92,6 @@ fn build_menu_url(app: &AppHandle, direction: &str) -> String {
     format!("{}/#/menu?direction={}", base_url, direction)
 }
 
-// ==================== POSITION DETECTION SYSTEM ====================
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BallPosition {
-    LeftTop,      // 屏幕左上1/3区域
-    LeftMiddle,   // 屏幕左中1/3区域
-    LeftBottom,   // 屏幕左下1/3区域
-    RightTop,     // 屏幕右上1/3区域
-    RightMiddle,  // 屏幕右中1/3区域
-    RightBottom,  // 屏幕右下1/3区域
-    TopCenter,    // 屏幕上中1/3区域
-    BottomCenter, // 屏幕下中1/3区域
-    Center,       // 屏幕中心区域
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MenuPosition {
-    Below, // 菜单在球下方
-    Above, // 菜单在球上方
-    Left,  // 菜单在球左侧
-    Right, // 菜单在球右侧
-}
-
-impl Default for MenuPosition {
-    fn default() -> Self {
-        MenuPosition::Below
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // 为未来功能扩展预留
-enum MenuAlignment {
-    LeftAlign,   // 左对齐
-    RightAlign,  // 右对齐
-    CenterAlign, // 居中对齐
-    TopAlign,    // 上对齐
-    BottomAlign, // 下对齐
-}
-
-impl Default for MenuAlignment {
-    fn default() -> Self {
-        MenuAlignment::LeftAlign
-    }
-}
-
 // ==================== INTERACTION STATE MACHINE ====================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,11 +133,7 @@ struct DockState {
     // hover 状态
     ball_hover: bool,
     menu_hover: bool,
-    // 新增：智能定位系统状态
-    ball_position: Option<BallPosition>, // 悬浮球位置分类
-    menu_position: MenuPosition,         // 菜单位置策略
-    menu_alignment: MenuAlignment,       // 菜单对齐方式
-    // 子菜单展开状态
+    // 菜单窗口位置
     menu_window_x: i32,       // 菜单窗口初始 x（逻辑像素），menu_expand 需要用
     menu_window_y: i32,       // 菜单窗口初始 y
     submenu_opens_left: bool, // true = 子菜单向左展开（球在右侧）
@@ -213,9 +164,6 @@ static DOCK_STATE: Mutex<DockState> = Mutex::new(DockState {
     is_in_pop_protection: false,
     ball_hover: false,
     menu_hover: false,
-    ball_position: None,
-    menu_position: MenuPosition::Below,
-    menu_alignment: MenuAlignment::LeftAlign,
     menu_window_x: 0,
     menu_window_y: 0,
     submenu_opens_left: false,
@@ -331,219 +279,6 @@ fn animate_to_position(
 }
 
 // ==================== POSITION DETECTION FUNCTIONS ====================
-
-/// 检测悬浮球在屏幕上的位置分类
-/// 将屏幕按1/3划分为9个区域进行精确检测
-fn detect_ball_position(
-    ball_x: i32,
-    ball_y: i32,
-    ball_width: i32,
-    ball_height: i32,
-    screen_width: i32,
-    screen_height: i32,
-) -> BallPosition {
-    // 计算悬浮球中心点位置
-    let center_x = ball_x + ball_width / 2;
-    let center_y = ball_y + ball_height / 2;
-
-    // 边界检查：确保参数合法
-    if screen_width <= 0 || screen_height <= 0 {
-        return BallPosition::Center;
-    }
-
-    // 水平位置判断 - 调整阈值使边缘检测更敏感
-    let horizontal_zone = if center_x < screen_width / 4 {
-        0 // 左侧 (左1/4)
-    } else if center_x > screen_width * 3 / 4 {
-        2 // 右侧 (右1/4)
-    } else {
-        1 // 中间
-    };
-
-    // 垂直位置判断（考虑macOS菜单栏）
-    let effective_center_y = center_y - MENUBAR_HEIGHT;
-    let effective_screen_height = screen_height - MENUBAR_HEIGHT;
-
-    // 防止除零错误
-    if effective_screen_height <= 0 {
-        return BallPosition::Center;
-    }
-
-    let effective_third_height = effective_screen_height / 3;
-
-    let vertical_zone = if effective_center_y < effective_third_height {
-        0 // 上方
-    } else if effective_center_y < effective_third_height * 2 {
-        1 // 中间
-    } else {
-        2 // 下方
-    };
-
-    // 根据位置组合确定分类
-    match (horizontal_zone, vertical_zone) {
-        (0, 0) => BallPosition::LeftTop,
-        (0, 1) => BallPosition::LeftMiddle,
-        (0, 2) => BallPosition::LeftBottom,
-        (1, 0) => BallPosition::TopCenter,
-        (1, 1) => BallPosition::Center,
-        (1, 2) => BallPosition::BottomCenter,
-        (2, 0) => BallPosition::RightTop,
-        (2, 1) => BallPosition::RightMiddle,
-        (2, 2) => BallPosition::RightBottom,
-        _ => BallPosition::Center, // 默认情况
-    }
-}
-
-/// 根据子菜单空间需求计算最佳菜单定位策略
-/// 返回 (菜单位置, 菜单对齐方式)
-fn calculate_menu_strategy(
-    ball_x: i32,
-    ball_y: i32,
-    ball_width: i32,
-    ball_height: i32,
-    screen_width: i32,
-    screen_height: i32,
-    menu_height: i32,
-    menu_gap: i32,
-) -> (MenuPosition, MenuAlignment) {
-    let submenu_width = 250; // 子菜单宽度
-
-    // 计算子菜单展示空间需求
-    let right_available = screen_width - (ball_x + ball_width + menu_gap);
-
-    // 根据子菜单空间决定菜单对齐方式
-    let menu_alignment = if right_available >= submenu_width {
-        // 右边空间够，菜单左对齐球体（子菜单向右展开）
-        MenuAlignment::LeftAlign
-    } else {
-        // 右边空间不够，菜单右对齐球体（子菜单向左展开）
-        MenuAlignment::RightAlign
-    };
-
-    // 垂直方向：检查球下方是否有足够空间显示菜单
-    let space_below = screen_height - (ball_y + ball_height + menu_gap);
-    let space_above = ball_y - MENUBAR_HEIGHT - menu_gap;
-
-    let menu_position = if space_below >= menu_height {
-        // 下方空间足够，在球下方显示
-        MenuPosition::Below
-    } else if space_above >= menu_height {
-        // 上方空间足够，在球上方显示
-        MenuPosition::Above
-    } else {
-        // 两边空间都不够，选择空间较大的一方
-        if space_below >= space_above {
-            MenuPosition::Below
-        } else {
-            MenuPosition::Above
-        }
-    };
-
-    (menu_position, menu_alignment)
-}
-
-/// 计算菜单的具体位置坐标
-/// 根据菜单位置策略和对齐方式计算最终坐标
-fn calculate_menu_position(
-    ball_x: i32,
-    ball_y: i32,
-    ball_width: i32,
-    ball_height: i32,
-    menu_width: i32,
-    menu_height: i32,
-    screen_width: i32,
-    screen_height: i32,
-    position: MenuPosition,
-    alignment: MenuAlignment,
-    gap: i32,
-) -> (i32, i32) {
-    // 边界检查：确保参数合法
-    if screen_width <= 0 || screen_height <= 0 || menu_width <= 0 || menu_height <= 0 {
-        return (0, MENUBAR_HEIGHT); // 返回安全的默认位置
-    }
-
-    let mut menu_x = ball_x;
-    let mut menu_y = ball_y;
-
-    // 根据菜单位置计算基础位置
-    match position {
-        MenuPosition::Below => {
-            menu_y = ball_y + ball_height + gap;
-        }
-        MenuPosition::Above => {
-            menu_y = ball_y - menu_height - gap;
-        }
-        MenuPosition::Right => {
-            menu_x = ball_x + ball_width + gap;
-        }
-        MenuPosition::Left => {
-            menu_x = ball_x - menu_width - gap;
-        }
-    }
-
-    // 根据对齐方式调整位置
-    match alignment {
-        MenuAlignment::LeftAlign => {
-            // 菜单左边缘与球左边缘对齐 - 已经是默认行为
-        }
-        MenuAlignment::RightAlign => {
-            // 菜单右边缘与球右边缘对齐
-            if position == MenuPosition::Below || position == MenuPosition::Above {
-                menu_x = ball_x + ball_width - menu_width;
-            }
-        }
-        MenuAlignment::CenterAlign => {
-            // 菜单中心与球中心对齐
-            if position == MenuPosition::Below || position == MenuPosition::Above {
-                menu_x = ball_x + (ball_width - menu_width) / 2;
-            } else {
-                menu_y = ball_y + (ball_height - menu_height) / 2;
-            }
-        }
-        MenuAlignment::TopAlign => {
-            // 菜单顶部与球顶部对齐
-            if position == MenuPosition::Right || position == MenuPosition::Left {
-                menu_y = ball_y;
-            }
-        }
-        MenuAlignment::BottomAlign => {
-            // 菜单底部与球底部对齐
-            if position == MenuPosition::Right || position == MenuPosition::Left {
-                menu_y = ball_y + ball_height - menu_height;
-            }
-        }
-    }
-
-    // 边界检查：确保菜单不超出屏幕边界
-    // 对于右对齐，优先保持右对齐效果
-    if alignment == MenuAlignment::RightAlign
-        && (position == MenuPosition::Below || position == MenuPosition::Above)
-    {
-        // 右对齐时，确保菜单右边缘不超出屏幕
-        if menu_x + menu_width > screen_width {
-            menu_x = screen_width - menu_width;
-        }
-        // 确保菜单左边缘不超出屏幕
-        menu_x = menu_x.max(0);
-    } else {
-        // 其他情况的常规边界检查
-        let max_x = screen_width.saturating_sub(menu_width);
-        menu_x = menu_x.max(0).min(max_x);
-    }
-
-    let max_y = screen_height.saturating_sub(menu_height);
-    menu_y = menu_y.max(MENUBAR_HEIGHT).min(max_y);
-
-    // 如果菜单仍然无法完全显示，启动降级策略
-    if menu_x + menu_width > screen_width {
-        menu_x = screen_width.saturating_sub(menu_width);
-    }
-    if menu_y + menu_height > screen_height {
-        menu_y = screen_height.saturating_sub(menu_height);
-    }
-
-    (menu_x, menu_y)
-}
 
 // ==================== WINDOW MANAGEMENT ====================
 
@@ -1181,7 +916,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     );
     tauri::WebviewWindowBuilder::new(app, "menu", menu_url)
         .title("Menu")
-        .inner_size(184.0, 116.0)
+        .inner_size(192.0, 124.0)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -1276,8 +1011,8 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                             }));
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                                            width: 184.0,
-                                            height: 116.0,
+                                            width: 192.0,
+                                            height: 124.0,
                                         }));
                                     }
                                 }
@@ -1317,11 +1052,11 @@ fn show_menu(app: tauri::AppHandle) {
     // 1. 先更新状态，保护球不被隐藏
     {
         let mut state = DOCK_STATE.lock().unwrap();
-        state.menu_hover = true;  // 设置菜单 hover 状态，防止球被隐藏
+        state.menu_hover = true;
         state.interaction_state = InteractionState::MenuShowing;
     }
 
-    // 2. 取消可能导致隐藏的定时器（不要调用 next_state_version()，那会取消弹出动画）
+    // 2. 取消可能导致隐藏的定时器
     {
         let mut timer = HIDE_DOCK_TIMER.lock().unwrap();
         let _ = timer.take();
@@ -1340,143 +1075,90 @@ fn show_menu(app: tauri::AppHandle) {
         return;
     };
 
-    let Ok(ball_size) = main_window.outer_size() else {
-        return;
-    };
     let Some(monitor) = main_window.current_monitor().ok().flatten() else {
         return;
     };
 
-    let screen_size = monitor.size();
     let scale_factor = monitor.scale_factor();
-
-    // Convert to logical pixels for all calculations
+    let screen_size = monitor.size();
     let screen_width = (screen_size.width as f64 / scale_factor) as i32;
     let screen_height = (screen_size.height as f64 / scale_factor) as i32;
 
     // 菜单尺寸常量
-    let initial_menu_width: i32 = 184;   // 初始主菜单宽度
-    let _expanded_menu_width: i32 = 428;  // 展开后总宽度（184 + 244）
-    // 使用主菜单的实际高度（约100px），而不是窗口高度（380px）
-    // 因为菜单位置计算应该基于主菜单，而不是整个窗口
-    let main_menu_height: i32 = 100;
-    let menu_gap: i32 = 4; // 球和菜单之间的间距
+    let menu_width: i32 = 192;
+    let submenu_width: i32 = 244;
+    let menu_height: i32 = 124;
+    let menu_gap: i32 = 4;
 
-    // 获取球的位置（直接使用窗口实际位置）
+    // 获取球的逻辑位置
     let Ok(ball_pos) = main_window.outer_position() else {
         return;
     };
-    let ball_full_width = (ball_size.width as f64 / scale_factor) as i32;
-    let ball_full_height = (ball_size.height as f64 / scale_factor) as i32;
+    let ball_size = *BALL_SIZE.lock().unwrap();
+    let visual_ball_size = (ball_size + BALL_PADDING * 2) as i32;
     let ball_x = (ball_pos.x as f64 / scale_factor) as i32;
     let ball_y = (ball_pos.y as f64 / scale_factor) as i32;
 
-    // 球的视觉尺寸 = BALL_SIZE + BALL_PADDING*2（与 update_window_size 一致）
-    // 窗口可能比视觉球大（如初始 120x120），球居中在窗口内
-    // 用视觉球尺寸做菜单定位，避免透明边距导致菜单偏远
-    let visual_ball_size = {
-        let b = *BALL_SIZE.lock().unwrap();
-        (b + BALL_PADDING * 2) as i32
+    // 计算水平方向：根据右侧空间决定菜单对齐方式和子菜单展开方向
+    let ball_right_edge = ball_x + visual_ball_size;
+    let space_right = screen_width - ball_right_edge;
+    let opens_left = space_right < submenu_width;
+
+    let (menu_x, submenu_direction) = if opens_left {
+        // 右侧空间不足（球在右侧），子菜单向左展开，主菜单右对齐球体
+        (ball_x + visual_ball_size - menu_width, "left")
+    } else {
+        // 右侧空间充足（球在左侧），子菜单向右展开，主菜单左对齐球体
+        (ball_x, "right")
     };
-    // 视觉球在窗口内居中，视觉球的实际边界相对于窗口的偏移
-    let visual_offset_x = (ball_full_width - visual_ball_size) / 2;
-    let visual_offset_y = (ball_full_height - visual_ball_size) / 2;
-    // 基于视觉球的位置和尺寸（而非整个窗口）
-    let visual_ball_x = ball_x + visual_offset_x;
-    let visual_ball_y = ball_y + visual_offset_y;
 
-    // Debug info
-    eprintln!("show_menu: scale_factor={}, ball_logical=({}, {}), ball_size=({}, {}), visual_ball=({}, {}, {}), menu_size=({}, {})",
-        scale_factor, ball_x, ball_y, ball_full_width, ball_full_height,
-        visual_ball_x, visual_ball_y, visual_ball_size, initial_menu_width, main_menu_height);
+    // 垂直方向：菜单在球下方（如果空间不够则上方）
+    let space_below = screen_height - (ball_y + visual_ball_size);
+    let show_above = space_below < menu_height + menu_gap;
+    let menu_y = if show_above {
+        ball_y - menu_height - menu_gap
+    } else {
+        ball_y + visual_ball_size + menu_gap
+    };
 
-    // 2. 检测悬浮球位置分类
-    let ball_position = detect_ball_position(
-        visual_ball_x,
-        visual_ball_y,
-        visual_ball_size,
-        visual_ball_size,
-        screen_width,
-        screen_height,
-    );
+    eprintln!("show_menu: screen=({}, {}), ball=({}, {}, size={}), space_right={}, opens_left={}, menu=({}, {})",
+        screen_width, screen_height, ball_x, ball_y, visual_ball_size, space_right, opens_left, menu_x, menu_y);
 
-    // 3. 计算菜单定位策略（采用Electron版本的智能逻辑）
-    let (menu_position, menu_alignment) = calculate_menu_strategy(
-        visual_ball_x,
-        visual_ball_y,
-        visual_ball_size,
-        visual_ball_size,
-        screen_width,
-        screen_height,
-        main_menu_height,
-        menu_gap,
-    );
-
-    // 4. 计算菜单具体位置（使用初始主菜单宽度 184px）
-    let (final_x, final_y) = calculate_menu_position(
-        visual_ball_x,
-        visual_ball_y,
-        visual_ball_size,
-        visual_ball_size,
-        initial_menu_width,
-        main_menu_height,
-        screen_width,
-        screen_height,
-        menu_position,
-        menu_alignment,
-        menu_gap,
-    );
-
-    // Debug: 打印最终菜单位置
-    eprintln!("show_menu: menu_position={:?}, menu_alignment={:?}, final=({}, {})",
-        menu_position, menu_alignment, final_x, final_y);
-
-    // 5. 保存策略信息到状态
+    // 存入 DOCK_STATE
     {
         let mut state = DOCK_STATE.lock().unwrap();
-        state.ball_position = Some(ball_position);
-        state.menu_position = menu_position;
-        state.menu_alignment = menu_alignment;
-    }
-
-    // 5.5 计算子菜单展开方向
-    let opens_left = menu_alignment == MenuAlignment::RightAlign;
-    let submenu_direction = if opens_left { "left" } else { "right" };
-
-    // 初始窗口宽度只容纳主菜单（184px）
-    // final_x 已经是基于 184px 宽度计算的右对齐位置，直接使用即可
-    let initial_menu_x = final_x;
-    let initial_menu_y = final_y;
-
-    // 存入 DOCK_STATE 供 menu_expand / menu_collapse 使用
-    {
-        let mut state = DOCK_STATE.lock().unwrap();
-        state.menu_window_x = initial_menu_x;
-        state.menu_window_y = initial_menu_y;
+        state.menu_window_x = menu_x;
+        state.menu_window_y = menu_y;
         state.submenu_opens_left = opens_left;
     }
 
-    // 6. 复用已有菜单窗口（navigate 刷新内容）或新建
+    // 复用或创建菜单窗口
     let menu_window = {
         let new_url = tauri::Url::parse(&build_menu_url(&app, submenu_direction)).unwrap();
         let windows = app.webview_windows();
         if let Some(existing) = windows.get("menu") {
-            // 先隐藏窗口，避免导航时的闪烁
             let _ = existing.hide();
-            // 在导航之前先设置窗口大小为主菜单尺寸，避免页面在错误尺寸下渲染
             let _ = existing.set_size(Size::Logical(tauri::LogicalSize {
-                width: 184.0,
-                height: 116.0,
+                width: menu_width as f64,
+                height: menu_height as f64,
             }));
             let _ = existing.set_position(Position::Logical(LogicalPosition {
-                x: initial_menu_x as f64,
-                y: initial_menu_y as f64,
+                x: menu_x as f64,
+                y: menu_y as f64,
             }));
+            eprintln!("show_menu: 复用窗口, 设置尺寸={}x{}, 位置=({}, {}), direction={}",
+                menu_width, menu_height, menu_x, menu_y, submenu_direction);
             let _ = existing.navigate(new_url);
             existing.clone()
         } else {
             match create_menu_window(&app, submenu_direction) {
-                Ok(w) => w,
+                Ok(w) => {
+                    let _ = w.set_position(Position::Logical(LogicalPosition {
+                        x: menu_x as f64,
+                        y: menu_y as f64,
+                    }));
+                    w
+                },
                 Err(e) => {
                     eprintln!("show_menu: 创建菜单窗口失败: {}", e);
                     return;
@@ -1485,8 +1167,22 @@ fn show_menu(app: tauri::AppHandle) {
         }
     };
 
+    // 确认窗口尺寸后再显示
+    if let Ok(size) = menu_window.outer_size() {
+        eprintln!("show_menu: 显示窗口前, 窗口尺寸={}x{}", size.width, size.height);
+    }
+
     // 显示窗口
     let _ = menu_window.show();
+}
+
+#[tauri::command]
+fn menu_ready(app: tauri::AppHandle) {
+    // Vue 组件准备好后，显示菜单窗口
+    if let Some(menu_window) = app.webview_windows().get("menu") {
+        let _ = menu_window.show();
+        eprintln!("menu_ready: 菜单窗口已显示");
+    }
 }
 
 #[tauri::command]
@@ -1506,8 +1202,8 @@ fn hide_menu(app: tauri::AppHandle) {
         let _ = menu_window.emit("menu-hidden", ());
         // 重置窗口大小为主菜单尺寸，避免下次显示时出现抖动
         let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
-            width: 184.0,
-            height: 116.0,
+            width: 192.0,
+            height: 124.0,
         }));
         let _ = menu_window.hide();
     }
@@ -1520,10 +1216,13 @@ fn menu_expand(app: tauri::AppHandle) {
             let s = DOCK_STATE.lock().unwrap();
             (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
         };
+        eprintln!("menu_expand: init=({}, {}), opens_left={}", init_x, init_y, opens_left);
         if opens_left {
-            // 向左展开：窗口 x 左移244，宽度扩至428
+            // 向左展开：窗口 x 左移236（子菜单宽度），宽度扩至428
+            let new_x = init_x - 236;
+            eprintln!("menu_expand: 向左展开, 新位置 x={}", new_x);
             let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                x: (init_x - 244) as f64,
+                x: new_x as f64,
                 y: init_y as f64,
             }));
         }
@@ -1542,15 +1241,15 @@ fn menu_collapse(app: tauri::AppHandle) {
             (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
         };
         if opens_left {
-            // 收起：恢复初始 x，宽度缩回184
+            // 收起：恢复初始 x，宽度缩回192
             let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
                 x: init_x as f64,
                 y: init_y as f64,
             }));
         }
         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 184.0,
-            height: 116.0,
+            width: 192.0,
+            height: 124.0,
         }));
     }
 }
@@ -1594,6 +1293,24 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
         // 确保最小尺寸，外环需要 ballSize + 8，再加两边 padding
         let actual_size = size.max(30);
         let full_size = actual_size + BALL_PADDING * 2;
+
+        // 获取当前位置和旧尺寸
+        let current_pos = main_window.outer_position().ok();
+        let old_size = main_window.outer_size().ok();
+
+        if let (Some(pos), Some(old)) = (current_pos, old_size) {
+            // 计算新的窗口位置，保持视觉中心不变
+            // 当窗口从 120x120 缩小到 84x84 时：
+            // - 旧中心 = pos + 60
+            // - 新中心 = new_pos + 42
+            // - 要保持中心不变: new_pos = pos + 60 - 42 = pos - 18
+            let new_x = pos.x - ((old.width as u32 - full_size) / 2) as i32;
+            let new_y = pos.y - ((old.height as u32 - full_size) / 2) as i32;
+
+            // 先设置位置，再设置尺寸
+            let _ = main_window.set_position(Position::Physical(PhysicalPosition { x: new_x, y: new_y }));
+        }
+
         // 使用 LogicalSize 以正确支持高 DPI 屏幕
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
             width: full_size as f64,
@@ -2027,6 +1744,11 @@ pub fn run() {
                         let margin_right = 50.0;
                         let initial_x = (screen_size.width as f64 - size as f64 * scale - margin_right * scale) as i32;
                         let initial_y = (screen_size.height as f64 * 0.7 - (size as f64 * scale) / 2.0) as i32;
+                        // 设置正确的窗口尺寸（与 tauri.conf.json 中的 120x120 不同）
+                        let _ = window.set_size(Size::Logical(tauri::LogicalSize {
+                            width: size as f64,
+                            height: size as f64,
+                        }));
                         let _ = window.set_position(Position::Physical(PhysicalPosition {
                             x: initial_x,
                             y: initial_y,
@@ -2082,7 +1804,7 @@ pub fn run() {
             }
 
             // 检查 main 窗口状态
-            if let Some(main_window) = app.get_webview_window("main") {
+            if let Some(_main_window) = app.get_webview_window("main") {
                 log_msg("main 窗口已找到，等待前端调用 update_login_status");
             } else {
                 log_msg("错误: main 窗口未找到！");
@@ -2142,6 +1864,7 @@ pub fn run() {
             get_window_position,
             show_menu,
             hide_menu,
+            menu_ready,
             scroll_ball,
             optimizer_scan_all,
             optimizer_disk_scan,
