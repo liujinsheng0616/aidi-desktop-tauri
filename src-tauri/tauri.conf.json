@@ -14,6 +14,7 @@
       {
         "label": "main",
         "title": "AIDI",
+        "url": "index.html",
         "width": 120,
         "height": 120,
         "decorations": false,

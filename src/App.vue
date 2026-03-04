@@ -21,6 +21,18 @@ function loadSettings() {
   }
 }
 
+// 登录完成后的初始化逻辑（供 Rust 端调用）
+async function handleLoginComplete() {
+  await invoke('update_login_status', { isLoggedIn: true })
+  await initApp()
+  await syncAuthToBackend()
+}
+
+// 暴露全局函数供 Rust 调用
+if (typeof window !== 'undefined') {
+  (window as any).__aidiHandleLoginComplete = handleLoginComplete
+}
+
 /** 同步认证信息到 Rust 后端（用于后台静默上报） */
 async function syncAuthToBackend() {
   const token = getToken()

@@ -1890,6 +1890,43 @@ fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
     log_msg(&format!("托盘菜单已更新: is_logged_in={}, ball_visible={}", is_logged_in, ball_visible));
 }
 
+/// 登录成功后由 login 窗口调用
+/// 关闭登录窗口、更新托盘菜单、通知主窗口初始化
+#[tauri::command]
+async fn on_login_success(app: tauri::AppHandle) {
+    log_msg("on_login_success: 登录成功");
+
+    // 更新登录状态
+    IS_LOGGED_IN.store(true, Ordering::SeqCst);
+
+    // 关闭登录窗口
+    if let Some(w) = app.webview_windows().get("login") {
+        let _ = w.hide();
+        log_msg("登录窗口已隐藏");
+    }
+
+    // 更新托盘菜单为已登录状态
+    rebuild_tray_menu(&app, true, false);
+
+    // 获取 main 窗口并显示
+    if let Some(main_window) = app.webview_windows().get("main") {
+        // 先显示窗口（确保 WebView 已初始化）
+        let _ = main_window.show();
+        log_msg("主窗口已显示");
+
+        // 给 WebView 一点时间初始化
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // 调用前端的初始化函数
+        let eval_result = main_window.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
+        log_msg(&format!("调用前端初始化函数: {:?}", eval_result));
+
+        // 更新托盘菜单（浮动球现在可见了）
+        let visible = main_window.is_visible().unwrap_or(false);
+        rebuild_tray_menu(&app, true, visible);
+    }
+}
+
 // ==================== MAIN ENTRY POINT ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1984,9 +2021,12 @@ pub fn run() {
                         let scale = monitor.scale_factor();
                         let ball_size = *BALL_SIZE.lock().unwrap();
                         let size = ball_size + BALL_PADDING * 2;
-                        // 居中：屏幕中心
-                        let initial_x = ((screen_size.width as f64 - size as f64 * scale) / 2.0) as i32;
-                        let initial_y = ((screen_size.height as f64 - size as f64 * scale) / 2.0) as i32;
+                        // 初始位置：屏幕靠右中下
+                        // x: 距离右边 50px
+                        // y: 屏幕高度的 70% 位置
+                        let margin_right = 50.0;
+                        let initial_x = (screen_size.width as f64 - size as f64 * scale - margin_right * scale) as i32;
+                        let initial_y = (screen_size.height as f64 * 0.7 - (size as f64 * scale) / 2.0) as i32;
                         let _ = window.set_position(Position::Physical(PhysicalPosition {
                             x: initial_x,
                             y: initial_y,
@@ -2115,6 +2155,7 @@ pub fn run() {
             show_login_window,
             close_login_window,
             update_login_status,
+            on_login_success,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

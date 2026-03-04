@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { emitTo } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { fetchUserIdByCode, fetchTokenByUserId, fetchCurrentUser, setToken, setUser } from '../stores/auth'
 
 type Status = 'qr' | 'processing' | 'success' | 'error'
@@ -30,7 +30,8 @@ async function handleCode(code: string) {
     setUser(user)
     status.value = 'success'
     await new Promise(r => setTimeout(r, 800))
-    await emitTo('main', 'login-complete', {})
+    // 直接调用 Rust 命令处理登录完成，不依赖 main 窗口的事件监听
+    await invoke('on_login_success')
   } catch (err) {
     status.value = 'error'
     errorMessage.value = err instanceof Error ? err.message : '登录失败，请重试'
