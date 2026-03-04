@@ -22,8 +22,6 @@ permissions:
 jobs:
   build:
     env:
-      # 根据 tag 或手动输入确定环境
-      # 如果 tag 以 -test 结尾，则为 test 环境，否则为 prod
       AIDI_ENV: ${{ contains(github.ref_name, '-test') && 'test' || github.event.inputs.environment || 'prod' }}
     strategy:
       fail-fast: false
@@ -76,19 +74,6 @@ jobs:
           prerelease: ${{ env.AIDI_ENV == 'test' }}
           args: ${{ matrix.args }}
 
-      - name: Build PKG installer (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/AIDI Desktop.app"
-          chmod +x pkg-scripts/postinstall
-          pkgbuild \
-            --component "$APP_PATH" \
-            --install-location /Applications \
-            --scripts pkg-scripts \
-            --identifier com.aidi.desktop \
-            --version "1.0.0" \
-            "AIDI-Desktop.pkg"
-
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
@@ -96,14 +81,6 @@ jobs:
           name: macos-build
           path: |
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
-
-      - name: Upload macOS PKG
-        if: matrix.platform == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-pkg
-          path: AIDI-Desktop.pkg
 
       - name: Upload Windows artifacts
         if: matrix.platform == 'windows-latest'
