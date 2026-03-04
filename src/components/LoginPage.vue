@@ -30,95 +30,158 @@ async function logDebug(message: string) {
 
 let deepLinkUnsubscribe: (() => void) | null = null
 
-function retryLogin() {
+async function retryLogin() {
+  await logDebug('[Login] 点击重新登录，跳转到 /login.html')
   window.location.href = '/login.html'
 }
 
 async function handleCode(code: string) {
+  await logDebug(`[Login] handleCode 开始处理, code=${code.substring(0, 15)}...`)
   status.value = 'processing'
   try {
+    await logDebug('[Login] 正在调用 fetchUserIdByCode...')
     const userId = await fetchUserIdByCode(code)
+    await logDebug(`[Login] fetchUserIdByCode 返回 userId=${userId}`)
+
+    await logDebug('[Login] 正在调用 fetchTokenByUserId...')
     const token = await fetchTokenByUserId(userId)
+    await logDebug(`[Login] fetchTokenByUserId 返回 token=${token.substring(0, 10)}...`)
+
     setToken(token)
+
+    await logDebug('[Login] 正在调用 fetchCurrentUser...')
     const user = await fetchCurrentUser(token)
+    await logDebug(`[Login] fetchCurrentUser 返回 user=${JSON.stringify(user)}`)
+
     setUser(user)
     status.value = 'success'
+
+    await logDebug('[Login] 登录成功，等待 800ms 后调用 on_login_success')
     await new Promise(r => setTimeout(r, 800))
+
     // 直接调用 Rust 命令处理登录完成，不依赖 main 窗口的事件监听
     await invoke('on_login_success')
+    await logDebug('[Login] on_login_success 调用完成')
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : '登录失败，请重试'
+    await logDebug(`[Login] handleCode 错误: ${errMsg}`)
     status.value = 'error'
-    errorMessage.value = err instanceof Error ? err.message : '登录失败，请重试'
+    errorMessage.value = errMsg
   }
 }
 
 // 飞书 sso/qr 页面扫码授权后，通过 postMessage 把 tmp_code（纯字符串）发给父页面
 // 父页面需模拟 Feishu QRLogin SDK 行为：拼接 tmp_code 跳转到 OAuth 授权端点
 // 授权端点再重定向回 redirect_uri?code=xxx，onMounted 读取 code 完成登录
-function onMessage(e: MessageEvent) {
+async function onMessage(e: MessageEvent) {
+  await logDebug(`[Login] onMessage 触发, origin=${e.origin}, dataType=${typeof e.data}`)
+
   const feishuOrigins = ['feishu.cn', 'larksuite.com', 'larkoffice.com']
-  if (!feishuOrigins.some(o => e.origin.endsWith(o))) return
-  if (typeof e.data !== 'string' || !e.data) return
+  if (!feishuOrigins.some(o => e.origin.endsWith(o))) {
+    await logDebug(`[Login] onMessage 忽略非飞书来源: ${e.origin}`)
+    return
+  }
+  if (typeof e.data !== 'string' || !e.data) {
+    await logDebug(`[Login] onMessage 忽略非字符串数据`)
+    return
+  }
+
+  await logDebug(`[Login] 收到飞书 postMessage, data=${e.data.substring(0, 50)}...`)
+
   // e.data 就是 tmp_code，跳转让 Feishu 换取真正的 code
-  window.location.href = `${gotoUrl}&tmp_code=${encodeURIComponent(e.data)}`
+  const redirectUrl = `${gotoUrl}&tmp_code=${encodeURIComponent(e.data)}`
+  await logDebug(`[Login] 准备跳转到飞书授权页面: ${redirectUrl}`)
+
+  try {
+    window.location.href = redirectUrl
+    await logDebug(`[Login] 跳转命令已执行`)
+  } catch (err) {
+    await logDebug(`[Login] 跳转失败: ${err}`)
+    status.value = 'error'
+    errorMessage.value = `跳转失败: ${err instanceof Error ? err.message : String(err)}`
+  }
 }
 
 // 兜底：iframe 同源跳转时（redirect_uri 落在 localhost）直接从 iframe URL 提取 code
-function onIframeLoad() {
+async function onIframeLoad() {
+  await logDebug(`[Login] onIframeLoad 触发`)
   try {
     const search = iframeRef.value?.contentWindow?.location.search ?? ''
+    await logDebug(`[Login] iframe search: ${search}`)
     const code = new URLSearchParams(search).get('code')
-    if (code) handleCode(code)
-  } catch {
+    if (code) {
+      await logDebug(`[Login] 从 iframe 提取到 code: ${code.substring(0, 10)}...`)
+      await handleCode(code)
+    }
+  } catch (e) {
     // 跨域帧抛出 SecurityError，忽略
+    await logDebug(`[Login] onIframeLoad 跨域错误 (预期行为)`)
   }
 }
 
 // 处理 deep link 回调（生产环境）
 // 飞书重定向到 aidi://auth?code=xxx
-function handleDeepLink(urls: string[]) {
-  console.log('[DeepLink] 收到 URLs:', urls)
+async function handleDeepLink(urls: string[]) {
+  await logDebug(`[Login] handleDeepLink 收到 URLs: ${JSON.stringify(urls)}`)
   for (const url of urls) {
     try {
       const urlObj = new URL(url)
       const code = urlObj.searchParams.get('code')
       if (code) {
-        console.log('[DeepLink] 提取到 code:', code.substring(0, 10) + '...')
-        handleCode(code)
+        await logDebug(`[Login] DeepLink 提取到 code: ${code.substring(0, 10)}...`)
+        await handleCode(code)
         return
       }
     } catch (e) {
-      console.warn('[DeepLink] URL 解析失败:', url, e)
+      await logDebug(`[Login] DeepLink URL 解析失败: ${url}, error=${e}`)
     }
   }
 }
 
 onMounted(async () => {
+  // 全局错误捕获
+  const handleError = async (event: ErrorEvent) => {
+    await logDebug(`[Login] 全局错误: ${event.message}, filename=${event.filename}, lineno=${event.lineno}`)
+  }
+  const handleRejection = async (event: PromiseRejectionEvent) => {
+    await logDebug(`[Login] Promise 拒绝: ${event.reason}`)
+  }
+  window.addEventListener('error', handleError)
+  window.addEventListener('unhandledrejection', handleRejection)
+
   // 输出调试日志到桌面文件
-  await logDebug('[Login] 页面加载，环境变量调试:')
+  await logDebug('========== LoginPage onMounted ==========')
+  await logDebug('[Login] 环境变量:')
   await logDebug(`  VITE_FS_APPID: ${appId}`)
-  await logDebug(`  VITE_FS_REDIRECT_URI (原始): ${redirectUriRaw}`)
+  await logDebug(`  VITE_FS_REDIRECT_URI: ${redirectUriRaw}`)
   await logDebug(`  gotoUrl: ${gotoUrl}`)
   await logDebug(`  qrIframeSrc: ${qrIframeSrc}`)
+  await logDebug(`  当前 URL: ${window.location.href}`)
+  await logDebug(`  当前 origin: ${window.location.origin}`)
+  await logDebug(`  当前 pathname: ${window.location.pathname}`)
+  await logDebug(`  当前 search: ${window.location.search}`)
 
   // 开发环境：OAuth 回调页面以 ?code=xxx 重新加载
   const code = new URLSearchParams(window.location.search).get('code')
   if (code) {
-    await logDebug(`[Login] 检测到 code 参数: ${code.substring(0, 10)}...`)
+    await logDebug(`[Login] 检测到 URL 中的 code 参数: ${code.substring(0, 15)}...`)
     await handleCode(code)
     return
   }
 
+  await logDebug(`[Login] 未检测到 code 参数，进入扫码模式...`)
+
   // 注册 deep link 监听器（生产环境）
   try {
     deepLinkUnsubscribe = await onOpenUrl(handleDeepLink)
-    await logDebug('[DeepLink] 监听器已注册')
+    await logDebug('[Login] DeepLink 监听器已注册')
   } catch (e) {
-    await logDebug(`[DeepLink] 注册失败: ${e}`)
+    await logDebug(`[Login] DeepLink 注册失败: ${e}`)
   }
 
-  // 监听 iframe postMessage（开发环境兜底）
+  // 监听 iframe postMessage
   window.addEventListener('message', onMessage)
+  await logDebug('[Login] postMessage 监听器已注册')
 })
 
 onUnmounted(() => {

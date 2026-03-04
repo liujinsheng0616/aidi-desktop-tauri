@@ -12,14 +12,32 @@ export interface UserInfo {
   fsUserId: string | null
 }
 
+// 简单的日志函数
+function logAuth(message: string) {
+  console.log(`[Auth] ${message}`)
+}
+
 // 接口1：code → userId
 export async function fetchUserIdByCode(code: string): Promise<string> {
   const appId = import.meta.env.VITE_FS_APPID
   const baseUrl = import.meta.env.VITE_API_BASE_URL
   const params = new URLSearchParams({ code, appId })
-  const res = await fetch(`${baseUrl}/api-uaa/oauth/feishu/employee/authorize?${params}`)
-  if (!res.ok) throw new Error('获取授权信息失败，请联系管理员')
+  const url = `${baseUrl}/api-uaa/oauth/feishu/employee/authorize?${params}`
+
+  logAuth(`fetchUserIdByCode 请求: ${url}`)
+
+  const res = await fetch(url)
+  logAuth(`fetchUserIdByCode 响应状态: ${res.status}`)
+
+  if (!res.ok) {
+    const text = await res.text()
+    logAuth(`fetchUserIdByCode 错误响应: ${text}`)
+    throw new Error('获取授权信息失败，请联系管理员')
+  }
+
   const data = await res.json()
+  logAuth(`fetchUserIdByCode 响应数据: ${JSON.stringify(data)}`)
+
   const userId = data.userId ?? data.data?.userId
   if (!userId) throw new Error('获取授权信息失败，请联系管理员')
   return userId
@@ -30,7 +48,11 @@ export async function fetchTokenByUserId(userId: string): Promise<string> {
   const baseUrl = import.meta.env.VITE_API_BASE_URL
   const credentials = btoa(`${import.meta.env.VITE_BASIC_USERNAME}:${import.meta.env.VITE_BASIC_PASSWORD}`)
   const body = new URLSearchParams({ openId: userId })
-  const res = await fetch(`${baseUrl}/api-uaa/oauth/openId/token`, {
+  const url = `${baseUrl}/api-uaa/oauth/openId/token`
+
+  logAuth(`fetchTokenByUserId 请求: ${url}, body: ${body.toString()}`)
+
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Basic ${credentials}`,
@@ -38,8 +60,17 @@ export async function fetchTokenByUserId(userId: string): Promise<string> {
     },
     body: body.toString(),
   })
-  if (!res.ok) throw new Error(`获取 Token 失败: ${res.status}`)
+  logAuth(`fetchTokenByUserId 响应状态: ${res.status}`)
+
+  if (!res.ok) {
+    const text = await res.text()
+    logAuth(`fetchTokenByUserId 错误响应: ${text}`)
+    throw new Error(`获取 Token 失败: ${res.status}`)
+  }
+
   const data = await res.json()
+  logAuth(`fetchTokenByUserId 响应数据: ${JSON.stringify(data).substring(0, 200)}...`)
+
   const token = data.access_token
   if (!token) throw new Error('接口未返回有效 access_token')
   return token
@@ -83,11 +114,24 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}): Pr
 // 接口3：获取当前登录人信息
 export async function fetchCurrentUser(token: string): Promise<UserInfo> {
   const baseUrl = import.meta.env.VITE_API_BASE_URL
-  const res = await fetch(`${baseUrl}/api-user/users/current`, {
+  const url = `${baseUrl}/api-user/users/current`
+
+  logAuth(`fetchCurrentUser 请求: ${url}`)
+
+  const res = await fetch(url, {
     headers: { 'Authorization': `Bearer ${token}` },
   })
-  if (!res.ok) throw new Error(`获取用户信息失败: ${res.status}`)
+  logAuth(`fetchCurrentUser 响应状态: ${res.status}`)
+
+  if (!res.ok) {
+    const text = await res.text()
+    logAuth(`fetchCurrentUser 错误响应: ${text}`)
+    throw new Error(`获取用户信息失败: ${res.status}`)
+  }
+
   const data = await res.json()
+  logAuth(`fetchCurrentUser 响应数据: ${JSON.stringify(data)}`)
+
   if (data.resp_code !== 0) throw new Error(data.resp_msg || '获取用户信息失败')
   const user = data.data
   if (!user) throw new Error('接口未返回有效用户信息')
