@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { onOpenUrl } from '@tauri-apps/plugin-deep-link'
 import { fetchUserIdByCode, fetchTokenByUserId, fetchCurrentUser, setToken, setUser } from '../stores/auth'
 
 type Status = 'qr' | 'processing' | 'success' | 'error'
@@ -15,6 +16,8 @@ const redirectUri = encodeURIComponent(import.meta.env.VITE_FS_REDIRECT_URI as s
 const gotoUrl = `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=FS`
 
 const qrIframeSrc = `https://passport.feishu.cn/suite/passport/sso/qr?goto=${encodeURIComponent(gotoUrl)}`
+
+let deepLinkUnsubscribe: (() => void) | null = null
 
 function retryLogin() {
   window.location.href = '/login.html'
@@ -60,18 +63,50 @@ function onIframeLoad() {
   }
 }
 
+// 处理 deep link 回调（生产环境）
+// 飞书重定向到 aidi://auth?code=xxx
+function handleDeepLink(urls: string[]) {
+  console.log('[DeepLink] 收到 URLs:', urls)
+  for (const url of urls) {
+    try {
+      const urlObj = new URL(url)
+      const code = urlObj.searchParams.get('code')
+      if (code) {
+        console.log('[DeepLink] 提取到 code:', code.substring(0, 10) + '...')
+        handleCode(code)
+        return
+      }
+    } catch (e) {
+      console.warn('[DeepLink] URL 解析失败:', url, e)
+    }
+  }
+}
+
 onMounted(async () => {
-  // OAuth 回调：页面以 ?code=xxx 重新加载
+  // 开发环境：OAuth 回调页面以 ?code=xxx 重新加载
   const code = new URLSearchParams(window.location.search).get('code')
   if (code) {
     await handleCode(code)
     return
   }
+
+  // 注册 deep link 监听器（生产环境）
+  try {
+    deepLinkUnsubscribe = await onOpenUrl(handleDeepLink)
+    console.log('[DeepLink] 监听器已注册')
+  } catch (e) {
+    console.warn('[DeepLink] 注册失败:', e)
+  }
+
+  // 监听 iframe postMessage（开发环境兜底）
   window.addEventListener('message', onMessage)
 })
 
 onUnmounted(() => {
   window.removeEventListener('message', onMessage)
+  if (deepLinkUnsubscribe) {
+    deepLinkUnsubscribe()
+  }
 })
 </script>
 
