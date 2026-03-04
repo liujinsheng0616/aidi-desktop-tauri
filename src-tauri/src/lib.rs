@@ -2037,7 +2037,37 @@ pub fn run() {
                         api.prevent_close();
                     }
                 });
+            } else {
+                log_msg("错误: login 窗口未找到！");
             }
+
+            // 检查 main 窗口状态
+            if let Some(main_window) = app.get_webview_window("main") {
+                log_msg("main 窗口已找到，等待前端调用 update_login_status");
+            } else {
+                log_msg("错误: main 窗口未找到！");
+            }
+
+            // 超时机制：如果前端 3 秒内没有调用 update_login_status，自动显示登录窗口
+            // 这处理了 Windows 上 main 窗口 visible=false 导致 WebView 不加载的问题
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(3));
+                if !IS_LOGGED_IN.load(Ordering::SeqCst) {
+                    log_msg("前端 3 秒内未响应，自动显示登录窗口");
+                    if let Some(w) = app_handle.webview_windows().get("login") {
+                        let _ = w.center();
+                        let _ = w.show();
+                        #[cfg(target_os = "windows")]
+                        {
+                            use tauri::{LogicalSize, Size};
+                            let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                            let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                        }
+                        let _ = w.set_focus();
+                    }
+                }
+            });
 
             // 启动守护线程
             report_worker::start_report_worker(app.handle().clone());
