@@ -12,6 +12,42 @@ use tauri::{AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, Posi
 use tauri::tray::TrayIconBuilder;
 use tauri::menu::{Menu, MenuItem};
 
+// ==================== LOGGING ====================
+
+use std::fs::{OpenOptions, File};
+use std::io::Write;
+use std::sync::OnceLock;
+
+static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
+
+/// 初始化日志文件
+fn init_log_file(app: &AppHandle) {
+    if let Ok(app_dir) = app.path().app_data_dir() {
+        let _ = std::fs::create_dir_all(&app_dir);
+        let log_path = app_dir.join("aidi-debug.log");
+        if let Ok(file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            let _ = LOG_FILE.set(Mutex::new(file));
+            log_msg(&format!("=== AIDI 启动 {} ===", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+        }
+    }
+}
+
+/// 写入日志消息
+fn log_msg(msg: &str) {
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let log_line = format!("[{}] {}\n", timestamp, msg);
+    println!("{}", log_line.trim());
+    if let Some(log_file) = LOG_FILE.get() {
+        if let Ok(mut file) = log_file.lock() {
+            let _ = file.write_all(log_line.as_bytes());
+        }
+    }
+}
+
 // ==================== GLOBAL LOGIN STATUS ====================
 
 /// 全局登录状态（用于动态切换托盘菜单）
@@ -1824,6 +1860,9 @@ fn show_login_window(app: tauri::AppHandle) {
             let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
         }
         let _ = w.set_focus();
+        log_msg("show_login_window: 登录窗口已显示");
+    } else {
+        log_msg("show_login_window 错误: 找不到登录窗口！");
     }
 }
 
@@ -1838,6 +1877,7 @@ fn close_login_window(app: tauri::AppHandle) {
 /// 前端登录成功后调用此命令同步状态
 #[tauri::command]
 fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
+    log_msg(&format!("update_login_status: is_logged_in={}", is_logged_in));
     IS_LOGGED_IN.store(is_logged_in, Ordering::SeqCst);
 
     // 获取当前浮动球可见性
@@ -1848,6 +1888,7 @@ fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
     };
 
     rebuild_tray_menu(&app, is_logged_in, ball_visible);
+    log_msg(&format!("托盘菜单已更新: is_logged_in={}, ball_visible={}", is_logged_in, ball_visible));
 }
 
 // ==================== MAIN ENTRY POINT ====================
@@ -1861,14 +1902,21 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                // 初始化日志文件
+                init_log_file(app.handle());
+                log_msg("应用 setup 开始");
+
                 // 创建菜单栏 tray icon
+                // Windows 使用 ico 格式，macOS 使用 png 格式
+                #[cfg(target_os = "windows")]
+                let tray_icon_bytes = include_bytes!("../icons/icon.ico");
+                #[cfg(not(target_os = "windows"))]
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
+
                 if let Ok(icon) = tauri::image::Image::from_bytes(tray_icon_bytes) {
-                    // 初始状态悬浮球隐藏中，菜单显示"显示浮动球"
-                    let toggle_item = MenuItem::with_id(app, "toggle", "显示浮动球", true, None::<&str>)?;
-                    let aigc_item = MenuItem::with_id(app, "aigc", "打开AIDI", true, None::<&str>)?;
-                    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-                    let menu = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item])?;
+                    // 初始状态默认为未登录，菜单只显示"登录"
+                    let login_item = MenuItem::with_id(app, "login", "登录", true, None::<&str>)?;
+                    let menu = Menu::with_items(app, &[&login_item])?;
 
                     let _ = TrayIconBuilder::with_id("main-tray")
                         .icon(icon)
@@ -1881,6 +1929,7 @@ pub fn run() {
                     app.on_menu_event(|app, event| match event.id.as_ref() {
                         "login" => {
                             // 显示登录窗口
+                            log_msg("托盘菜单点击: 登录");
                             if let Some(w) = app.webview_windows().get("login") {
                                 let _ = w.center();
                                 let _ = w.show();
@@ -1891,6 +1940,9 @@ pub fn run() {
                                     let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
                                 }
                                 let _ = w.set_focus();
+                                log_msg("登录窗口已显示（从托盘）");
+                            } else {
+                                log_msg("错误: 找不到登录窗口！");
                             }
                         }
                         "toggle" => {
@@ -1977,8 +2029,10 @@ pub fn run() {
 
             // 拦截 login 窗口关闭事件：隐藏而不是销毁
             if let Some(login_window) = app.get_webview_window("login") {
+                log_msg("login 窗口已找到，设置关闭拦截");
                 let _ = login_window.clone().on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        log_msg("login 窗口关闭请求被拦截，隐藏窗口");
                         let _ = login_window.hide();
                         api.prevent_close();
                     }
