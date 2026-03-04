@@ -1907,9 +1907,10 @@ pub fn run() {
                 log_msg("应用 setup 开始");
 
                 // 创建菜单栏 tray icon
-                // Windows 使用 ico 格式，macOS 使用 png 格式
+                // 使用 PNG 格式（Tauri 不支持 ICO 格式）
+                // Windows 使用 32x32 小图标，macOS 使用 tray-icon.png
                 #[cfg(target_os = "windows")]
-                let tray_icon_bytes = include_bytes!("../icons/icon.ico");
+                let tray_icon_bytes = include_bytes!("../icons/32x32.png");
                 #[cfg(not(target_os = "windows"))]
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
 
