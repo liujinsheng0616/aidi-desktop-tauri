@@ -312,9 +312,12 @@ fn rebuild_tray_menu(app: &tauri::AppHandle, is_logged_in: bool, ball_visible: b
                 }
             }
         } else {
-            // 未登录菜单：只有登录
-            if let Ok(login_item) = MenuItem::with_id(app, "login", "登录", true, None::<&str>) {
-                if let Ok(menu) = Menu::with_items(app, &[&login_item]) {
+            // 未登录菜单：登录、退出
+            if let (Ok(login_item), Ok(quit_item)) = (
+                MenuItem::with_id(app, "login", "登录", true, None::<&str>),
+                MenuItem::with_id(app, "quit", "退出", true, None::<&str>),
+            ) {
+                if let Ok(menu) = Menu::with_items(app, &[&login_item, &quit_item]) {
                     let _ = tray.set_menu(Some(menu));
                 }
             }
@@ -1644,6 +1647,12 @@ async fn on_login_success(app: tauri::AppHandle) {
     }
 }
 
+/// 前端调试日志（写入桌面 aidi-debug.log）
+#[tauri::command]
+fn log_debug(message: String) {
+    log_msg(&format!("[前端] {}", message));
+}
+
 // ==================== MAIN ENTRY POINT ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1669,9 +1678,10 @@ pub fn run() {
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
 
                 if let Ok(icon) = tauri::image::Image::from_bytes(tray_icon_bytes) {
-                    // 初始状态默认为未登录，菜单只显示"登录"
+                    // 初始状态默认为未登录，菜单显示"登录"和"退出"
                     let login_item = MenuItem::with_id(app, "login", "登录", true, None::<&str>)?;
-                    let menu = Menu::with_items(app, &[&login_item])?;
+                    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                    let menu = Menu::with_items(app, &[&login_item, &quit_item])?;
 
                     let _ = TrayIconBuilder::with_id("main-tray")
                         .icon(icon)
@@ -1880,6 +1890,7 @@ pub fn run() {
             close_login_window,
             update_login_status,
             on_login_success,
+            log_debug,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

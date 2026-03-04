@@ -11,11 +11,30 @@ const errorMessage = ref('')
 const iframeRef = ref<HTMLIFrameElement | null>(null)
 
 const appId = import.meta.env.VITE_FS_APPID as string
-const redirectUri = encodeURIComponent(import.meta.env.VITE_FS_REDIRECT_URI as string)
+const redirectUriRaw = import.meta.env.VITE_FS_REDIRECT_URI as string
+const redirectUri = encodeURIComponent(redirectUriRaw)
 // gotoUrl 保留原始值，postMessage 回调时需要拼接 tmp_code 再跳转
 const gotoUrl = `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=FS`
 
 const qrIframeSrc = `https://passport.feishu.cn/suite/passport/sso/qr?goto=${encodeURIComponent(gotoUrl)}`
+
+// 写日志到桌面文件
+async function logDebug(message: string) {
+  console.log(message)
+  try {
+    await invoke('log_debug', { message })
+  } catch {
+    // 忽略错误
+  }
+}
+
+// 调试日志
+logDebug('[Login] 环境变量调试:')
+logDebug(`  VITE_FS_APPID: ${appId}`)
+logDebug(`  VITE_FS_REDIRECT_URI (原始): ${redirectUriRaw}`)
+logDebug(`  VITE_FS_REDIRECT_URI (编码): ${redirectUri}`)
+logDebug(`  gotoUrl: ${gotoUrl}`)
+logDebug(`  qrIframeSrc: ${qrIframeSrc}`)
 
 let deepLinkUnsubscribe: (() => void) | null = null
 
