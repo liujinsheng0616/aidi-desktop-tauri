@@ -5,15 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "vue-tsc --noEmit && vite build --mode $npm_config_mode",
+    "build:test": "vue-tsc --noEmit && vite build --mode test",
+    "build:prod": "vue-tsc --noEmit && vite build --mode production",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:test": "AIDI_ENV=test tauri dev",
     "tauri:prod": "AIDI_ENV=prod tauri dev",
-    "tauri:build": "vite build && tauri build",
-    "tauri:build:test": "vite build --mode test && tauri build",
-    "tauri:build:prod": "vite build --mode production && tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:test": "AIDI_ENV=test tauri build",
+    "tauri:build:prod": "AIDI_ENV=prod tauri build"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",

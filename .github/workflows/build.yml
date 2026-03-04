@@ -67,11 +67,15 @@ jobs:
 
       - name: Build app (test)
         if: env.AIDI_ENV == 'test'
-        run: npm run tauri:build:test -- ${{ matrix.args }}
+        run: npx tauri build ${{ matrix.args }}
+        env:
+          AIDI_ENV: test
 
       - name: Build app (prod)
         if: env.AIDI_ENV == 'prod'
-        run: npm run tauri:build:prod -- ${{ matrix.args }}
+        run: npx tauri build ${{ matrix.args }}
+        env:
+          AIDI_ENV: prod
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest'
