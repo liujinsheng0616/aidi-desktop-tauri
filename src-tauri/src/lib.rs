@@ -1676,12 +1676,15 @@ pub fn run() {
                     let urls = event.urls();
                     log_msg(&format!("[Rust] Deep link 收到 URLs: {:?}", urls));
 
+                    // 转换为字符串数组
+                    let url_strings: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
+
                     // 发送事件到所有窗口
                     if let Some(window) = app_handle.webview_windows().get("login") {
-                        let _ = window.emit("deep-link-received", urls);
+                        let _ = window.emit("deep-link-received", &url_strings);
                     }
                     if let Some(window) = app_handle.webview_windows().get("main") {
-                        let _ = window.emit("deep-link-received", urls);
+                        let _ = window.emit("deep-link-received", &url_strings);
                     }
                 });
                 log_msg("[Rust] Deep link 监听器已注册");
