@@ -1669,6 +1669,22 @@ pub fn run() {
                 init_log_file();
                 log_msg("应用 setup 开始");
 
+                // 监听 deep link 事件
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().on_open_url(|event| {
+                    let urls = event.urls();
+                    log_msg(&format!("[Rust] Deep link 收到 URLs: {:?}", urls));
+
+                    // 发送事件到所有窗口
+                    if let Some(windows) = app.webview_windows().get("login") {
+                        let _ = windows.emit("deep-link-received", urls);
+                    }
+                    if let Some(windows) = app.webview_windows().get("main") {
+                        let _ = windows.emit("deep-link-received", urls);
+                    }
+                });
+                log_msg("[Rust] Deep link 监听器已注册");
+
                 // 创建菜单栏 tray icon
                 // 使用 PNG 格式（Tauri 不支持 ICO 格式）
                 // Windows 使用 32x32 小图标，macOS 使用 tray-icon.png

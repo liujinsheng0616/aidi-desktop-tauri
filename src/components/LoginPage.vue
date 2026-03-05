@@ -171,12 +171,30 @@ onMounted(async () => {
 
   await logDebug(`[Login] 未检测到 code 参数，进入扫码模式...`)
 
-  // 注册 deep link 监听器（生产环境）
+  // 注册 deep link 监听器（前端插件方式）
   try {
     deepLinkUnsubscribe = await onOpenUrl(handleDeepLink)
-    await logDebug('[Login] DeepLink 监听器已注册')
+    await logDebug('[Login] DeepLink 插件监听器已注册')
   } catch (e) {
-    await logDebug(`[Login] DeepLink 注册失败: ${e}`)
+    await logDebug(`[Login] DeepLink 插件注册失败: ${e}`)
+  }
+
+  // 监听 Rust 端转发的 deep link 事件（备用方式）
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen<string[]>('deep-link-received', async (event) => {
+      await logDebug(`[Login] 收到 Rust 转发的 deep-link-received 事件: ${JSON.stringify(event.payload)}`)
+      await handleDeepLink(event.payload)
+    })
+    await logDebug('[Login] Rust deep link 事件监听器已注册')
+    // 保存取消监听函数
+    const originalUnsubscribe = deepLinkUnsubscribe
+    deepLinkUnsubscribe = async () => {
+      if (originalUnsubscribe) originalUnsubscribe()
+      unlisten()
+    }
+  } catch (e) {
+    await logDebug(`[Login] Rust deep link 事件监听失败: ${e}`)
   }
 
   // 监听 iframe postMessage
