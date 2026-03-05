@@ -20,19 +20,52 @@ use std::sync::OnceLock;
 
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 
-/// 初始化日志文件（输出到桌面）
+/// 初始化日志文件（尝试多个位置以确保日志能够创建）
 fn init_log_file() {
-    if let Some(desktop) = dirs::desktop_dir() {
-        let log_path = desktop.join("aidi-debug.log");
-        if let Ok(file) = OpenOptions::new()
+    // 尝试多个日志位置，按优先级排序
+    let log_locations: Vec<Option<std::path::PathBuf>> = vec![
+        // 优先：桌面
+        dirs::desktop_dir().map(|p| p.join("aidi-debug.log")),
+        // 备选：本地应用数据目录
+        dirs::data_local_dir().map(|p| {
+            let dir = p.join("aidi-desktop");
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join("debug.log")
+        }),
+        // 最后：可执行文件同级目录
+        std::env::current_exe().ok().and_then(|exe| {
+            exe.parent().map(|p| p.join("aidi-debug.log"))
+        }),
+    ];
+
+    for location in log_locations.into_iter().flatten() {
+        match OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&log_path)
+            .open(&location)
         {
-            let _ = LOG_FILE.set(Mutex::new(file));
-            log_msg(&format!("=== AIDI 启动 {} ===", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+            Ok(file) => {
+                let _ = LOG_FILE.set(Mutex::new(file));
+                // 直接打印到 stdout，因为此时 LOG_FILE 可能还未设置
+                println!("日志文件创建成功: {:?}", location);
+                // 写入启动日志
+                log_msg(&format!("=== AIDI 启动 {} ===", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+                log_msg(&format!("日志文件位置: {:?}", location));
+                // Windows 特定诊断信息
+                #[cfg(target_os = "windows")]
+                {
+                    log_msg(&format!("Windows 桌面目录: {:?}", dirs::desktop_dir()));
+                    log_msg(&format!("Windows 本地数据目录: {:?}", dirs::data_local_dir()));
+                    log_msg(&format!("可执行文件路径: {:?}", std::env::current_exe()));
+                }
+                return;
+            }
+            Err(e) => {
+                eprintln!("无法创建日志文件 {:?}: {}", location, e);
+            }
         }
     }
+    eprintln!("警告: 所有日志位置都失败，日志将仅输出到控制台");
 }
 
 /// 写入日志消息
