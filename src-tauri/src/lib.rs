@@ -1541,19 +1541,30 @@ fn get_script_path(script_name: &str) -> std::path::PathBuf {
     #[cfg(not(target_os = "windows"))]
     let script_file = format!("{}.sh", script_name);
 
-    // In development: scripts are copied to target/debug/scripts/ or target/release/scripts/
-    // In production: scripts are bundled alongside the app
     let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut path = exe_path.clone();
     path.pop(); // Remove executable name
 
-    // First, try scripts in the same directory as the executable (dev mode or bundled)
+    // 1. Try scripts in the same directory as executable (Windows, Linux, dev mode)
     let script_in_exe_dir = path.join("scripts").join(&script_file);
     if script_in_exe_dir.exists() {
         return script_in_exe_dir;
     }
 
-    // Fallback: try src-tauri/scripts (for development before copy)
+    // 2. macOS: Try ../Resources/scripts (standard macOS bundle structure)
+    #[cfg(target_os = "macos")]
+    {
+        let mut resources_path = path.clone();
+        resources_path.pop(); // Go up to Contents/
+        resources_path.push("Resources");
+        resources_path.push("scripts");
+        resources_path.push(&script_file);
+        if resources_path.exists() {
+            return resources_path;
+        }
+    }
+
+    // 3. Fallback: development mode (target/debug or target/release)
     if path.ends_with("debug") || path.ends_with("release") {
         path.pop(); // Remove debug/release
         path.pop(); // Remove target
@@ -2073,6 +2084,19 @@ pub fn run() {
                             let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
                         }
                         let _ = w.set_focus();
+                    } else {
+                        // login 窗口不存在，动态创建
+                        log_msg("login 窗口不存在，动态创建...");
+                        match create_login_window(&app_handle) {
+                            Ok(w) => {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                                log_msg("login 窗口已动态创建并显示");
+                            }
+                            Err(e) => {
+                                log_msg(&format!("创建 login 窗口失败: {:?}", e));
+                            }
+                        }
                     }
                 }
             });
