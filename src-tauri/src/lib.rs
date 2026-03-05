@@ -339,7 +339,9 @@ fn hide_main_window(app: tauri::AppHandle, window: tauri::Window) {
 /// - 未登录：只显示"登录"选项
 /// - 已登录：显示"打开AIDI"、"显示/隐藏浮动球"、"退出"
 fn rebuild_tray_menu(app: &tauri::AppHandle, is_logged_in: bool, ball_visible: bool) {
+    log_msg(&format!("rebuild_tray_menu: is_logged_in={}, ball_visible={}", is_logged_in, ball_visible));
     if let Some(tray) = app.tray_by_id("main-tray") {
+        log_msg("rebuild_tray_menu: 找到托盘图标");
         if is_logged_in {
             // 已登录菜单：打开AIDI、显示/隐藏浮动球、退出
             let toggle_label = if ball_visible { "隐藏浮动球" } else { "显示浮动球" };
@@ -350,6 +352,9 @@ fn rebuild_tray_menu(app: &tauri::AppHandle, is_logged_in: bool, ball_visible: b
             ) {
                 if let Ok(menu) = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item]) {
                     let _ = tray.set_menu(Some(menu));
+                    log_msg("rebuild_tray_menu: 已登录菜单设置成功");
+                } else {
+                    log_msg("rebuild_tray_menu: 已登录菜单创建失败");
                 }
             }
         } else {
@@ -360,9 +365,14 @@ fn rebuild_tray_menu(app: &tauri::AppHandle, is_logged_in: bool, ball_visible: b
             ) {
                 if let Ok(menu) = Menu::with_items(app, &[&login_item, &quit_item]) {
                     let _ = tray.set_menu(Some(menu));
+                    log_msg("rebuild_tray_menu: 未登录菜单设置成功");
+                } else {
+                    log_msg("rebuild_tray_menu: 未登录菜单创建失败");
                 }
             }
         }
+    } else {
+        log_msg("rebuild_tray_menu: 找不到托盘图标 main-tray");
     }
 }
 
@@ -1215,10 +1225,17 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
     // Windows 上需要立即显示窗口，否则可能不会显示
     #[cfg(target_os = "windows")]
     {
-        log_msg("[create_login_window] Windows: 立即显示窗口");
+        log_msg(&format!("[create_login_window] Windows: 显示前状态 - 可见性: {}, 位置: {:?}, 大小: {:?}",
+            login_window.is_visible().unwrap_or(false),
+            login_window.outer_position().ok(),
+            login_window.outer_size().ok()));
         let _ = login_window.center();
         let _ = login_window.show();
         let _ = login_window.set_focus();
+        log_msg(&format!("[create_login_window] Windows: 显示后状态 - 可见性: {}, 位置: {:?}, 大小: {:?}",
+            login_window.is_visible().unwrap_or(false),
+            login_window.outer_position().ok(),
+            login_window.outer_size().ok()));
     }
 
     log_msg("[create_login_window] 窗口设置完成，返回窗口对象");
@@ -2009,11 +2026,14 @@ pub fn run() {
                 #[cfg(not(target_os = "windows"))]
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
 
+                log_msg("[Tray] 开始创建托盘图标...");
                 if let Ok(icon) = tauri::image::Image::from_bytes(tray_icon_bytes) {
+                    log_msg("[Tray] 图标加载成功");
                     // 初始状态默认为未登录，菜单显示"登录"和"退出"
                     let login_item = MenuItem::with_id(app, "login", "登录", true, None::<&str>)?;
                     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
                     let menu = Menu::with_items(app, &[&login_item, &quit_item])?;
+                    log_msg("[Tray] 菜单项创建成功");
 
                     let _ = TrayIconBuilder::with_id("main-tray")
                         .icon(icon)
@@ -2021,6 +2041,7 @@ pub fn run() {
                         .menu(&menu)
                         .show_menu_on_left_click(true)
                         .build(app)?;
+                    log_msg("[Tray] 托盘图标创建成功");
 
                     // 全局菜单事件监听（菜单重建后依然有效）
                     app.on_menu_event(|app, event| match event.id.as_ref() {
@@ -2095,6 +2116,8 @@ pub fn run() {
                         }
                         _ => {}
                     });
+                } else {
+                    log_msg("[Tray] 错误: 图标加载失败");
                 }
 
                 // Position main window at center
