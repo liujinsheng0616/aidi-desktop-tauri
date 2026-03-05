@@ -1094,11 +1094,14 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 /// 创建登录窗口（动态创建，支持 on_navigation 监听）
 /// 远程登录页无法访问 window.__TAURI__ API，所以通过监听 URL hash 变化来通信
 fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
+    log_msg("[create_login_window] 开始创建登录窗口...");
     let app_handle = app.clone();
     let login_url_str = build_login_url(app);
+    log_msg(&format!("[create_login_window] 登录 URL: {}", login_url_str));
     let login_url = tauri::WebviewUrl::External(
         tauri::Url::parse(&login_url_str).unwrap()
     );
+    log_msg("[create_login_window] URL 解析成功，开始构建窗口...");
     let build_result = tauri::WebviewWindowBuilder::new(app, "login", login_url)
         .title("AIDI 登录")
         .inner_size(360.0, 420.0)
@@ -1186,10 +1189,17 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
             true
         })
         .build();
+    log_msg("[create_login_window] 窗口 build() 调用完成");
 
     let login_window = match build_result {
-        Ok(w) => w,
-        Err(e) => return Err(e),
+        Ok(w) => {
+            log_msg("[create_login_window] 窗口创建成功");
+            w
+        },
+        Err(e) => {
+            log_msg(&format!("[create_login_window] 窗口创建失败: {:?}", e));
+            return Err(e);
+        },
     };
 
     // 设置窗口关闭拦截：隐藏而不是销毁
@@ -1202,6 +1212,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         }
     });
 
+    log_msg("[create_login_window] 窗口设置完成，返回窗口对象");
     Ok(login_window)
 }
 
