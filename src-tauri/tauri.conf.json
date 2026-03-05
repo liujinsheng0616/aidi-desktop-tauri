@@ -42,21 +42,6 @@
         "resizable": false,
         "center": true,
         "visible": false
-      },
-      {
-        "label": "login",
-        "title": "AIDI 登录",
-        "url": "https://microsapptest.yadea.com.cn/aidi-desktop/login.html",
-        "width": 360,
-        "height": 420,
-        "decorations": true,
-        "transparent": false,
-        "shadow": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "center": true,
-        "visible": false
       }
     ],
     "security": {

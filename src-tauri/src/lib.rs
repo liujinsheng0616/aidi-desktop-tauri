@@ -65,23 +65,25 @@ pub struct Settings {
 // ==================== EXTERNAL URL CONFIGURATION ====================
 
 /// 获取外部项目的基础 URL
-/// 优先使用环境变量 AIDI_EXTERNAL_URL，其次从环境变量 AIDI_ENV 决定使用哪个环境
-/// 支持的环境：dev（开发）、test（测试）、prod（生产）
-/// 如果都没设置，默认使用开发环境地址 http://127.0.0.1:5173
+/// 优先级：AIDI_EXTERNAL_URL > VITE_APP_DOMAIN > AIDI_ENV > 默认 test 环境
 fn get_external_url_base(_app: &AppHandle) -> String {
-    // 优先读取环境变量
+    // 优先读取环境变量 AIDI_EXTERNAL_URL
     if let Ok(url) = std::env::var("AIDI_EXTERNAL_URL") {
         return url;
     }
 
-    // 通过环境变量 AIDI_ENV 决定使用哪个环境
-    let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "dev".to_string());
+    // 尝试读取 VITE_APP_DOMAIN（从 .env 文件或环境变量）
+    if let Ok(domain) = std::env::var("VITE_APP_DOMAIN") {
+        return format!("{}/aidi-desktop", domain);
+    }
 
-    // 根据环境返回对应的 URL
+    // 通过环境变量 AIDI_ENV 决定使用哪个环境
+    let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "test".to_string());
+
     match env.as_str() {
         "test" => "https://microsapptest.yadea.com.cn/aidi-desktop",
         "prod" => "https://aidi.yadea.com.cn/aidi-desktop",
-        _ => "http://127.0.0.1:5173", // dev 或其他情况默认
+        _ => "http://127.0.0.1:5173",
     }.to_string()
 }
 
@@ -90,6 +92,12 @@ fn get_external_url_base(_app: &AppHandle) -> String {
 fn build_menu_url(app: &AppHandle, direction: &str) -> String {
     let base_url = get_external_url_base(app);
     format!("{}/#/menu?direction={}", base_url, direction)
+}
+
+/// 构建登录页面的完整 URL
+fn build_login_url(app: &AppHandle) -> String {
+    let base_url = get_external_url_base(app);
+    format!("{}/#/login", base_url)
 }
 
 // ==================== INTERACTION STATE MACHINE ====================
@@ -1050,6 +1058,200 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         .build()
 }
 
+/// 创建登录窗口（动态创建，支持 on_navigation 监听）
+/// 远程登录页无法访问 window.__TAURI__ API，所以通过监听 URL hash 变化来通信
+fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
+    let app_handle = app.clone();
+    let login_url_str = build_login_url(app);
+    let login_url = tauri::WebviewUrl::External(
+        tauri::Url::parse(&login_url_str).unwrap()
+    );
+    let build_result = tauri::WebviewWindowBuilder::new(app, "login", login_url)
+        .title("AIDI 登录")
+        .inner_size(360.0, 420.0)
+        .decorations(true)
+        .transparent(false)
+        .shadow(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .center()
+        .visible(false)
+        .on_navigation(move |url| {
+            // 监听登录成功：解析 hash 中的 invoke=login-success&token=xxx&user=yyy
+            if let Some(fragment) = url.fragment() {
+                if let Some(rest) = fragment.strip_prefix("invoke=login-success") {
+                    log_msg(&format!("[login] 捕获到登录成功: {}", rest));
+
+                    // 解析参数
+                    let mut token = String::new();
+                    let mut user_json = String::new();
+
+                    // rest 格式: &token=xxx&user=yyy
+                    for pair in rest.trim_start_matches('&').split('&') {
+                        if let Some((k, v)) = pair.split_once('=') {
+                            match k {
+                                "token" => {
+                                    if let Ok(decoded) = urlencoding_decode(v) {
+                                        token = decoded;
+                                    }
+                                }
+                                "user" => {
+                                    if let Ok(decoded) = urlencoding_decode(v) {
+                                        user_json = decoded;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    if !token.is_empty() {
+                        let app2 = app_handle.clone();
+                        let token_owned = token.clone();
+                        let user_json_owned = user_json.clone();
+
+                        // 解析用户信息获取 userId 和 userName
+                        let (user_id, user_name) = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&user_json) {
+                            let id = json["id"].as_str().unwrap_or("").to_string();
+                            let name = json["name"].as_str().unwrap_or("").to_string();
+                            (id, name)
+                        } else {
+                            (String::new(), String::new())
+                        };
+
+                        // 保存登录信息到 auth.json
+                        std::thread::spawn(move || {
+                            log_msg(&format!("[login] 保存登录信息: userId={}, userName={}", user_id, user_name));
+
+                            if let Some(data_dir) = dirs::data_local_dir() {
+                                let aidi_dir = data_dir.join("aidi-desktop");
+                                let _ = std::fs::create_dir_all(&aidi_dir);
+
+                                let auth_file = aidi_dir.join("auth.json");
+                                let content = serde_json::json!({
+                                    "token": token_owned,
+                                    "userId": user_id,
+                                    "userName": user_name,
+                                    "user": user_json_owned,
+                                    "updatedAt": chrono::Local::now().to_rfc3339(),
+                                });
+
+                                if let Err(e) = std::fs::write(&auth_file, content.to_string()) {
+                                    log_msg(&format!("[login] 保存 auth.json 失败: {}", e));
+                                } else {
+                                    log_msg(&format!("[login] 登录信息已保存到: {:?}", auth_file));
+                                }
+                            }
+
+                            // 执行登录成功逻辑（显示主窗口、更新托盘等）
+                            handle_login_success(&app2);
+                        });
+                    }
+                }
+            }
+            true
+        })
+        .build();
+
+    let login_window = match build_result {
+        Ok(w) => w,
+        Err(e) => return Err(e),
+    };
+
+    // 设置窗口关闭拦截：隐藏而不是销毁
+    let login_window_clone = login_window.clone();
+    let _ = login_window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            log_msg("login 窗口关闭请求被拦截，隐藏窗口");
+            let _ = login_window_clone.hide();
+            api.prevent_close();
+        }
+    });
+
+    Ok(login_window)
+}
+
+/// URL 解码（简单实现）
+fn urlencoding_decode(s: &str) -> Result<String, ()> {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                result.push(byte as char);
+            } else {
+                return Err(());
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    Ok(result)
+}
+
+/// 登录成功后的处理逻辑（从 on_login_success 抽取出来供 on_navigation 调用）
+fn handle_login_success(app: &tauri::AppHandle) {
+    log_msg("handle_login_success: 登录成功");
+
+    // 更新登录状态
+    IS_LOGGED_IN.store(true, Ordering::SeqCst);
+
+    // 关闭登录窗口
+    if let Some(w) = app.webview_windows().get("login") {
+        let _ = w.hide();
+        log_msg("登录窗口已隐藏");
+    }
+
+    // 更新托盘菜单为已登录状态
+    rebuild_tray_menu(app, true, false);
+
+    // 获取 main 窗口并显示
+    if let Some(main_window) = app.webview_windows().get("main") {
+        // 先显示窗口（确保 WebView 已初始化）
+        let _ = main_window.show();
+        log_msg("主窗口已显示");
+
+        // 从 auth.json 读取登录信息并写入主窗口的 localStorage
+        if let Some(data_dir) = dirs::data_local_dir() {
+            let auth_file = data_dir.join("aidi-desktop").join("auth.json");
+            if let Ok(content) = std::fs::read_to_string(&auth_file) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let token = json["token"].as_str().unwrap_or("");
+                    let user_json = json["user"].as_str().unwrap_or("{}");
+
+                    let js_code = format!(
+                        r#"(function() {{
+                            var token = {};
+                            var user = {};
+                            try {{
+                                localStorage.setItem('aidi-token', token);
+                                localStorage.setItem('aidi-user', user);
+                            }} catch(e) {{}}
+                        }})();"#,
+                        serde_json::to_string(&serde_json::json!(token)).unwrap_or_else(|_| "\"\"".to_string()),
+                        user_json
+                    );
+
+                    let _ = main_window.eval(&js_code);
+                    log_msg("已将登录信息写入 localStorage");
+                }
+            }
+        }
+
+        // 调用前端的初始化函数
+        let eval_result = main_window.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
+        log_msg(&format!("调用前端初始化函数: {:?}", eval_result));
+
+        // 更新托盘菜单（浮动球现在可见了）
+        let visible = main_window.is_visible().unwrap_or(false);
+        rebuild_tray_menu(app, true, visible);
+    }
+}
+
 #[tauri::command]
 fn show_menu(app: tauri::AppHandle) {
     // 1. 先更新状态，保护球不被隐藏
@@ -1568,6 +1770,7 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 
 #[tauri::command]
 fn show_login_window(app: tauri::AppHandle) {
+    // 先尝试获取已存在的窗口
     if let Some(w) = app.webview_windows().get("login") {
         let _ = w.center();
         let _ = w.show();
@@ -1581,7 +1784,18 @@ fn show_login_window(app: tauri::AppHandle) {
         let _ = w.set_focus();
         log_msg("show_login_window: 登录窗口已显示");
     } else {
-        log_msg("show_login_window 错误: 找不到登录窗口！");
+        // 窗口不存在，动态创建
+        log_msg("show_login_window: 登录窗口不存在，尝试动态创建...");
+        match create_login_window(&app) {
+            Ok(w) => {
+                let _ = w.show();
+                let _ = w.set_focus();
+                log_msg("show_login_window: 登录窗口已动态创建并显示");
+            }
+            Err(e) => {
+                log_msg(&format!("show_login_window: 创建登录窗口失败: {:?}", e));
+            }
+        }
     }
 }
 
@@ -1615,36 +1829,7 @@ fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
 #[tauri::command]
 async fn on_login_success(app: tauri::AppHandle) {
     log_msg("on_login_success: 登录成功");
-
-    // 更新登录状态
-    IS_LOGGED_IN.store(true, Ordering::SeqCst);
-
-    // 关闭登录窗口
-    if let Some(w) = app.webview_windows().get("login") {
-        let _ = w.hide();
-        log_msg("登录窗口已隐藏");
-    }
-
-    // 更新托盘菜单为已登录状态
-    rebuild_tray_menu(&app, true, false);
-
-    // 获取 main 窗口并显示
-    if let Some(main_window) = app.webview_windows().get("main") {
-        // 先显示窗口（确保 WebView 已初始化）
-        let _ = main_window.show();
-        log_msg("主窗口已显示");
-
-        // 给 WebView 一点时间初始化
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // 调用前端的初始化函数
-        let eval_result = main_window.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
-        log_msg(&format!("调用前端初始化函数: {:?}", eval_result));
-
-        // 更新托盘菜单（浮动球现在可见了）
-        let visible = main_window.is_visible().unwrap_or(false);
-        rebuild_tray_menu(&app, true, visible);
-    }
+    handle_login_success(&app);
 }
 
 /// 保存登录信息到本地文件
@@ -1691,6 +1876,14 @@ fn log_debug(message: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 加载 .env 文件（按优先级：.env.{AIDI_ENV} > .env）
+    let env_mode = std::env::var("AIDI_ENV").unwrap_or_else(|_| "test".to_string());
+    let env_file = format!(".env.{}", env_mode);
+    // 先尝试加载 .env.{mode}，失败则加载 .env
+    if dotenv::from_filename(&env_file).is_err() {
+        let _ = dotenv::dotenv();
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
@@ -1854,19 +2047,7 @@ pub fn run() {
                 });
             }
 
-            // 拦截 login 窗口关闭事件：隐藏而不是销毁
-            if let Some(login_window) = app.get_webview_window("login") {
-                log_msg("login 窗口已找到，设置关闭拦截");
-                let _ = login_window.clone().on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        log_msg("login 窗口关闭请求被拦截，隐藏窗口");
-                        let _ = login_window.hide();
-                        api.prevent_close();
-                    }
-                });
-            } else {
-                log_msg("错误: login 窗口未找到！");
-            }
+            // login 窗口改为动态创建，关闭事件拦截在 create_login_window 中设置
 
             // 检查 main 窗口状态
             if let Some(_main_window) = app.get_webview_window("main") {

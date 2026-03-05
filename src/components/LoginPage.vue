@@ -56,7 +56,17 @@ async function handleCode(code: string) {
     setUser(user)
     status.value = 'success'
 
-    await logDebug('[Login] 登录成功，等待 800ms 后调用 on_login_success')
+    await logDebug('[Login] 登录成功，正在保存登录信息到文件...')
+    // 调用 Rust 命令保存登录信息到 auth.json（供主窗口读取）
+    await invoke('save_login_info', {
+      token,
+      userId: user.id,
+      userName: user.name,
+      userJson: JSON.stringify(user)
+    })
+    await logDebug('[Login] 登录信息已保存到文件')
+
+    await logDebug('[Login] 等待 800ms 后调用 on_login_success')
     await new Promise(r => setTimeout(r, 800))
 
     // 直接调用 Rust 命令处理登录完成，不依赖 main 窗口的事件监听
