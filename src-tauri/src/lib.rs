@@ -1998,6 +1998,10 @@ fn log_debug(message: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 尽早初始化日志文件（在任何其他操作之前）
+    init_log_file();
+    log_msg("=== AIDI 应用启动 ===");
+
     // 加载 .env 文件（按优先级：.env.{AIDI_ENV} > .env）
     let env_mode = std::env::var("AIDI_ENV").unwrap_or_else(|_| "test".to_string());
     let env_file = format!(".env.{}", env_mode);
@@ -2005,6 +2009,7 @@ pub fn run() {
     if dotenv::from_filename(&env_file).is_err() {
         let _ = dotenv::dotenv();
     }
+    log_msg(&format!("环境模式: {}", env_mode));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2014,8 +2019,6 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                // 初始化日志文件（输出到桌面）
-                init_log_file();
                 log_msg("应用 setup 开始");
 
                 // 监听 deep link 事件
