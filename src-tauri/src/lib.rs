@@ -37,7 +37,7 @@ fn init_log_file() {
     let log_locations: Vec<Option<std::path::PathBuf>> = vec![
         // 优先：本地应用数据目录（比桌面更可靠，Windows 11 + OneDrive 可能导致桌面路径问题）
         dirs::data_local_dir().map(|p| {
-            let dir = p.join("aidi-desktop");
+            let dir = p.join("AIDI Desktop");
             match std::fs::create_dir_all(&dir) {
                 Ok(_) => eprintln!("目录创建成功: {:?}", dir),
                 Err(e) => eprintln!("目录创建失败: {:?} - {}", dir, e),
@@ -123,15 +123,15 @@ fn get_external_url_base(_app: &AppHandle) -> String {
 
     // 尝试读取 VITE_APP_DOMAIN（从 .env 文件或环境变量）
     if let Ok(domain) = std::env::var("VITE_APP_DOMAIN") {
-        return format!("{}/aidi-desktop", domain);
+        return format!("{}/AIDI Desktop", domain);
     }
 
     // 通过环境变量 AIDI_ENV 决定使用哪个环境
     let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "test".to_string());
 
     match env.as_str() {
-        "test" => "https://microsapptest.yadea.com.cn/aidi-desktop",
-        "prod" => "https://aidi.yadea.com.cn/aidi-desktop",
+        "test" => "https://microsapptest.yadea.com.cn/AIDI Desktop",
+        "prod" => "https://aidi.yadea.com.cn/AIDI Desktop",
         _ => "http://127.0.0.1:5173",
     }.to_string()
 }
@@ -1187,7 +1187,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
                             log_msg(&format!("[login] 保存登录信息: userId={}, userName={}", user_id, user_name));
 
                             if let Some(data_dir) = dirs::data_local_dir() {
-                                let aidi_dir = data_dir.join("aidi-desktop");
+                                let aidi_dir = data_dir.join("AIDI Desktop");
                                 let _ = std::fs::create_dir_all(&aidi_dir);
 
                                 let auth_file = aidi_dir.join("auth.json");
@@ -1307,7 +1307,7 @@ fn handle_login_success(app: &tauri::AppHandle) {
 
         // 从 auth.json 读取登录信息并写入主窗口的 localStorage
         if let Some(data_dir) = dirs::data_local_dir() {
-            let auth_file = data_dir.join("aidi-desktop").join("auth.json");
+            let auth_file = data_dir.join("AIDI Desktop").join("auth.json");
             if let Ok(content) = std::fs::read_to_string(&auth_file) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                     let token = json["token"].as_str().unwrap_or("");
@@ -1962,7 +1962,7 @@ fn save_login_info(token: String, user_id: String, user_name: String, user_json:
 
     // 保存到本地文件
     if let Some(data_dir) = dirs::data_local_dir() {
-        let aidi_dir = data_dir.join("aidi-desktop");
+        let aidi_dir = data_dir.join("AIDI Desktop");
         if let Err(e) = std::fs::create_dir_all(&aidi_dir) {
             return Err(format!("创建目录失败: {}", e));
         }

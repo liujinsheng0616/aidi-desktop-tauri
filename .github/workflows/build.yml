@@ -21,8 +21,6 @@ permissions:
 
 jobs:
   build:
-    env:
-      AIDI_ENV: ${{ contains(github.ref_name, '-test') && 'test' || github.event.inputs.environment || 'production' }}
     strategy:
       fail-fast: false
       matrix:
@@ -66,30 +64,47 @@ jobs:
         run: npm ci
 
       - name: Build app (test)
-        if: env.AIDI_ENV == 'test'
+        if: contains(github.ref_name, '-test') || github.event.inputs.environment == 'test'
         run: npx tauri build ${{ matrix.args }}
         env:
           AIDI_ENV: test
 
       - name: Build app (production)
-        if: env.AIDI_ENV == 'production'
+        if: "!contains(github.ref_name, '-test') && github.event.inputs.environment != 'test'"
         run: npx tauri build ${{ matrix.args }}
         env:
           AIDI_ENV: production
 
-      - name: Upload macOS artifacts
-        if: matrix.platform == 'macos-latest'
+      - name: Upload macOS artifacts (test)
+        if: matrix.platform == 'macos-latest' && (contains(github.ref_name, '-test') || github.event.inputs.environment == 'test')
         uses: actions/upload-artifact@v4
         with:
-          name: macos-build-${{ env.AIDI_ENV }}
+          name: macos-build-test
           path: |
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
-      - name: Upload Windows artifacts
-        if: matrix.platform == 'windows-latest'
+      - name: Upload macOS artifacts (production)
+        if: matrix.platform == 'macos-latest' && (!contains(github.ref_name, '-test') && github.event.inputs.environment != 'test')
         uses: actions/upload-artifact@v4
         with:
-          name: windows-build-${{ env.AIDI_ENV }}
+          name: macos-build-production
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+      - name: Upload Windows artifacts (test)
+        if: matrix.platform == 'windows-latest' && (contains(github.ref_name, '-test') || github.event.inputs.environment == 'test')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-test
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Upload Windows artifacts (production)
+        if: matrix.platform == 'windows-latest' && (!contains(github.ref_name, '-test') && github.event.inputs.environment != 'test')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-production
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
@@ -97,7 +112,7 @@ jobs:
   test-release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-test')
+    if: contains(github.ref_name, '-test') || github.event.inputs.environment == 'test'
     steps:
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
@@ -129,7 +144,7 @@ jobs:
   production-release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-test')
+    if: "!contains(github.ref_name, '-test') && github.event.inputs.environment != 'test'"
     steps:
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
