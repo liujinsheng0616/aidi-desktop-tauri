@@ -123,15 +123,15 @@ fn get_external_url_base(_app: &AppHandle) -> String {
 
     // 尝试读取 VITE_APP_DOMAIN（从 .env 文件或环境变量）
     if let Ok(domain) = std::env::var("VITE_APP_DOMAIN") {
-        return format!("{}/AIDI Desktop", domain);
+        return format!("{}/aidi-desktop", domain);
     }
 
     // 通过环境变量 AIDI_ENV 决定使用哪个环境
     let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "test".to_string());
 
     match env.as_str() {
-        "test" => "https://microsapptest.yadea.com.cn/AIDI Desktop",
-        "prod" => "https://aidi.yadea.com.cn/AIDI Desktop",
+        "test" => "https://microsapptest.yadea.com.cn/aidi-desktop",
+        "prod" => "https://aidi.yadea.com.cn/aidi-desktop",
         _ => "http://127.0.0.1:5173",
     }.to_string()
 }
