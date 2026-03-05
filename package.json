@@ -11,12 +11,13 @@
     "build:prod": "vue-tsc --noEmit && vite build --mode production",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:test": "AIDI_ENV=test tauri dev",
-    "tauri:prod": "AIDI_ENV=prod tauri dev",
+    "pre-dev": "node pre-dev.js ${AIDI_ENV:-test}",
+    "tauri:dev": "node pre-dev.js ${AIDI_ENV:-test} && tauri dev",
+    "tauri:test": "AIDI_ENV=test node pre-dev.js test && tauri dev",
+    "tauri:prod": "AIDI_ENV=production node pre-dev.js production && tauri dev",
     "tauri:build": "tauri build",
-    "tauri:build:test": "AIDI_ENV=test tauri build",
-    "tauri:build:prod": "AIDI_ENV=prod tauri build"
+    "tauri:build:test": "AIDI_ENV=test node build.js && tauri build",
+    "tauri:build:prod": "AIDI_ENV=production node build.js && tauri build"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",

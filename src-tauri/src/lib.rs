@@ -1647,6 +1647,40 @@ async fn on_login_success(app: tauri::AppHandle) {
     }
 }
 
+/// 保存登录信息到本地文件
+/// 由 WebView 内的登录页面调用
+#[tauri::command]
+fn save_login_info(token: String, user_id: String, user_name: String, user_json: String) -> Result<(), String> {
+    log_msg(&format!("[Rust] 保存登录信息: userId={}, userName={}", user_id, user_name));
+
+    // 保存到本地文件
+    if let Some(data_dir) = dirs::data_local_dir() {
+        let aidi_dir = data_dir.join("aidi-desktop");
+        if let Err(e) = std::fs::create_dir_all(&aidi_dir) {
+            return Err(format!("创建目录失败: {}", e));
+        }
+
+        let auth_file = aidi_dir.join("auth.json");
+        let content = serde_json::json!({
+            "token": token,
+            "userId": user_id,
+            "userName": user_name,
+            "user": user_json,
+            "updatedAt": chrono::Local::now().to_rfc3339(),
+        });
+
+        if let Err(e) = std::fs::write(&auth_file, content.to_string()) {
+            return Err(format!("写入文件失败: {}", e));
+        }
+
+        log_msg(&format!("[Rust] 登录信息已保存到: {:?}", auth_file));
+    } else {
+        return Err("无法获取本地数据目录".to_string());
+    }
+
+    Ok(())
+}
+
 /// 前端调试日志（写入桌面 aidi-debug.log）
 #[tauri::command]
 fn log_debug(message: String) {
@@ -1911,6 +1945,7 @@ pub fn run() {
             update_login_status,
             on_login_success,
             log_debug,
+            save_login_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
