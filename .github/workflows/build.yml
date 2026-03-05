@@ -12,9 +12,9 @@ on:
         required: true
         type: choice
         options:
-          - prod
+          - production
           - test
-        default: 'prod'
+        default: 'production'
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ permissions:
 jobs:
   build:
     env:
-      AIDI_ENV: ${{ contains(github.ref_name, '-test') && 'test' || github.event.inputs.environment || 'prod' }}
+      AIDI_ENV: ${{ contains(github.ref_name, '-test') && 'test' || github.event.inputs.environment || 'production' }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,11 +71,11 @@ jobs:
         env:
           AIDI_ENV: test
 
-      - name: Build app (prod)
-        if: env.AIDI_ENV == 'prod'
+      - name: Build app (production)
+        if: env.AIDI_ENV == 'production'
         run: npx tauri build ${{ matrix.args }}
         env:
-          AIDI_ENV: prod
+          AIDI_ENV: production
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest'
@@ -118,7 +118,7 @@ jobs:
         with:
           name: 'AIDI Desktop ${{ github.ref_name }}'
           body: |
-            环境: ${{ contains(github.ref_name, '-test') && 'test' || 'prod' }}
+            环境: ${{ contains(github.ref_name, '-test') && 'test' || 'production' }}
           draft: true
           prerelease: ${{ contains(github.ref_name, '-test') }}
           files: |
