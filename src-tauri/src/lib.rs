@@ -1125,11 +1125,11 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
     let login_url_str = build_login_url(app);
     log_msg(&format!("[create_login_window] 登录 URL: {}", login_url_str));
 
-    // 先用 data URL 创建窗口（极简白屏），避免直接加载远程 URL 阻塞 UI
-    let loading_html = "data:text/html,%3C!DOCTYPE%20html%3E%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D%22UTF-8%22%3E%3Cstyle%3Ebody%7Bmargin%3A0%3Bheight%3A100vh%3Bbackground%3Alinear-gradient(180deg%2C%23fafafa%200%25%2C%23fff%20100%25)%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E";
+    // 先用空白页创建窗口，避免直接加载远程 URL 阻塞 UI
+    let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
 
-    log_msg("[create_login_window] 使用 loading 页面创建窗口...");
-    let build_result = tauri::WebviewWindowBuilder::new(app, "login", tauri::WebviewUrl::External(tauri::Url::parse(loading_html).unwrap()))
+    log_msg("[create_login_window] 使用空白页创建窗口...");
+    let build_result = tauri::WebviewWindowBuilder::new(app, "login", blank_url)
         .title("AIDI 登录")
         .inner_size(360.0, 420.0)
         .decorations(true)
