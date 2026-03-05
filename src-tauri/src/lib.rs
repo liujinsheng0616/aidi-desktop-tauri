@@ -1122,7 +1122,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .skip_taskbar(true)
         .resizable(false)
         .center()
-        .visible(false)
+        .visible(true)
         .on_navigation(move |url| {
             // 监听登录成功：解析 hash 中的 invoke=login-success&token=xxx&user=yyy
             if let Some(fragment) = url.fragment() {
@@ -1212,6 +1212,14 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         },
     };
 
+    // Windows 上需要立即显示窗口，否则可能不会显示
+    #[cfg(target_os = "windows")]
+    {
+        let _ = login_window.center();
+        let _ = login_window.show();
+        let _ = login_window.set_focus();
+    }
+
     // 设置窗口关闭拦截：隐藏而不是销毁
     let login_window_clone = login_window.clone();
     let _ = login_window.on_window_event(move |event| {
@@ -1221,22 +1229,6 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
             api.prevent_close();
         }
     });
-
-    // Windows 上需要立即显示窗口，否则可能不会显示
-    #[cfg(target_os = "windows")]
-    {
-        log_msg(&format!("[create_login_window] Windows: 显示前状态 - 可见性: {}, 位置: {:?}, 大小: {:?}",
-            login_window.is_visible().unwrap_or(false),
-            login_window.outer_position().ok(),
-            login_window.outer_size().ok()));
-        let _ = login_window.center();
-        let _ = login_window.show();
-        let _ = login_window.set_focus();
-        log_msg(&format!("[create_login_window] Windows: 显示后状态 - 可见性: {}, 位置: {:?}, 大小: {:?}",
-            login_window.is_visible().unwrap_or(false),
-            login_window.outer_position().ok(),
-            login_window.outer_size().ok()));
-    }
 
     log_msg("[create_login_window] 窗口设置完成，返回窗口对象");
     Ok(login_window)
@@ -2035,13 +2027,23 @@ pub fn run() {
                     let menu = Menu::with_items(app, &[&login_item, &quit_item])?;
                     log_msg("[Tray] 菜单项创建成功");
 
-                    let _ = TrayIconBuilder::with_id("main-tray")
+                    let tray = TrayIconBuilder::with_id("main-tray")
                         .icon(icon)
                         .tooltip("AIDI Desktop")
                         .menu(&menu)
                         .show_menu_on_left_click(true)
-                        .build(app)?;
-                    log_msg("[Tray] 托盘图标创建成功");
+                        .on_tray_icon_event(|_tray, event| {
+                            log_msg(&format!("[Tray] 托盘事件: {:?}", event));
+                        })
+                        .on_menu_event(|_tray, event| {
+                            log_msg(&format!("[Tray] 菜单事件: {:?}", event.id));
+                        })
+                        .build(app);
+
+                    match tray {
+                        Ok(_) => log_msg("[Tray] 托盘图标创建成功"),
+                        Err(e) => log_msg(&format!("[Tray] 托盘创建失败: {:?}", e)),
+                    }
 
                     // 全局菜单事件监听（菜单重建后依然有效）
                     app.on_menu_event(|app, event| match event.id.as_ref() {
