@@ -2138,9 +2138,6 @@ pub fn run() {
                         }
                         _ => {}
                     });
-                } else {
-                    log_msg("[Tray] 错误: 图标加载失败");
-                }
 
                 // Position main window at center
                 if let Some(window) = app.webview_windows().get("main") {
