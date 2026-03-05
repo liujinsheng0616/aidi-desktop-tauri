@@ -51,7 +51,7 @@ fn init_log_file() {
             exe.parent().map(|p| p.join("aidi-debug.log"))
         }),
         // 最后备选：临时目录（最可靠的备选位置）
-        std::env::temp_dir().into_iter().next().map(|p| p.join("aidi-debug.log")),
+        Some(std::env::temp_dir().join("aidi-debug.log")),
     ];
 
     for location in log_locations.into_iter().flatten() {
