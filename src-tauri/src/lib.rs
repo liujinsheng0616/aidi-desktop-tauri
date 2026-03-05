@@ -1124,11 +1124,11 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
     let login_url_str = build_login_url(app);
     log_msg(&format!("[create_login_window] 登录 URL: {}", login_url_str));
 
-    // 使用远程 URL 创建窗口，visible(false) 避免同步阻塞
-    let login_url = tauri::WebviewUrl::External(tauri::Url::parse(&login_url_str).unwrap());
+    // 先用 about:blank 创建窗口，避免 build() 阻塞
+    let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
 
-    log_msg("[create_login_window] 开始构建窗口...");
-    let build_result = tauri::WebviewWindowBuilder::new(app, "login", login_url)
+    log_msg("[create_login_window] 使用 about:blank 构建窗口...");
+    let build_result = tauri::WebviewWindowBuilder::new(app, "login", blank_url)
         .title("AIDI 登录")
         .inner_size(360.0, 420.0)
         .decorations(true)
@@ -1228,11 +1228,18 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         },
     };
 
-    // 窗口创建成功后，显示窗口
+    // 窗口创建成功后，显示窗口并导航到远程登录页
     let _ = login_window.center();
     let _ = login_window.show();
     let _ = login_window.set_focus();
-    log_msg("[create_login_window] 窗口已显示");
+    log_msg("[create_login_window] 窗口已显示，准备导航到远程登录页...");
+
+    // 使用 navigate() 跳转到远程登录页
+    let login_url = tauri::Url::parse(&login_url_str).unwrap();
+    match login_window.navigate(login_url) {
+        Ok(_) => log_msg(&format!("[create_login_window] 导航成功: {}", login_url_str)),
+        Err(e) => log_msg(&format!("[create_login_window] 导航失败: {:?}", e)),
+    }
 
     // 设置窗口关闭拦截：隐藏而不是销毁
     let login_window_clone = login_window.clone();
