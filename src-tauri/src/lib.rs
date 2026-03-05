@@ -1118,17 +1118,29 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 }
 
 /// 创建登录窗口（动态创建，支持 on_navigation 监听）
-/// 远程登录页无法访问 window.__TAURI__ API，所以通过监听 URL hash 变化来通信
+/// 先显示 loading 页面，再异步加载远程登录页，避免 Windows WebView2 阻塞 UI
 fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
     log_msg("[create_login_window] 开始创建登录窗口...");
     let app_handle = app.clone();
     let login_url_str = build_login_url(app);
     log_msg(&format!("[create_login_window] 登录 URL: {}", login_url_str));
-    let login_url = tauri::WebviewUrl::External(
-        tauri::Url::parse(&login_url_str).unwrap()
-    );
-    log_msg("[create_login_window] URL 解析成功，开始构建窗口...");
-    let build_result = tauri::WebviewWindowBuilder::new(app, "login", login_url)
+
+    // 先用 loading HTML 创建窗口，避免直接加载远程 URL 阻塞 UI
+    let loading_html = r#"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; }
+    .spinner { width: 40px; height: 40px; border: 3px solid #f0f0f0; border-top-color: #1677ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body><div class="spinner"></div></body>
+</html>"#;
+
+    log_msg("[create_login_window] 使用 loading 页面创建窗口...");
+    let build_result = tauri::WebviewWindowBuilder::new(app, "login", tauri::WebviewUrl::Html(loading_html.into()))
         .title("AIDI 登录")
         .inner_size(360.0, 420.0)
         .decorations(true)
@@ -1228,12 +1240,18 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         },
     };
 
-    // Windows 上需要立即显示窗口，否则可能不会显示
-    #[cfg(target_os = "windows")]
-    {
-        let _ = login_window.center();
-        let _ = login_window.show();
-        let _ = login_window.set_focus();
+    // 窗口创建成功后，显示窗口并跳转到远程登录页
+    let _ = login_window.center();
+    let _ = login_window.show();
+    let _ = login_window.set_focus();
+    log_msg("[create_login_window] 窗口已显示，准备跳转到远程登录页...");
+
+    // 使用 JavaScript 跳转到远程登录页（异步，不阻塞 UI）
+    let js_code = format!("window.location.href = '{}'", login_url_str);
+    if let Err(e) = login_window.eval(&js_code) {
+        log_msg(&format!("[create_login_window] 跳转失败: {:?}", e));
+    } else {
+        log_msg("[create_login_window] 跳转命令已执行");
     }
 
     // 设置窗口关闭拦截：隐藏而不是销毁
