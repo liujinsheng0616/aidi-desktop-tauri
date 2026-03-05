@@ -1117,19 +1117,18 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         .build()
 }
 
-/// 创建登录窗口（动态创建，支持 on_navigation 监听）
-/// 先显示 loading 页面，再异步加载远程登录页，避免 Windows WebView2 阻塞 UI
+/// 创建登录窗口（动态创建，加载远程登录页）
 fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
     log_msg("[create_login_window] 开始创建登录窗口...");
     let app_handle = app.clone();
     let login_url_str = build_login_url(app);
     log_msg(&format!("[create_login_window] 登录 URL: {}", login_url_str));
 
-    // 先用空白页创建窗口，避免直接加载远程 URL 阻塞 UI
-    let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
+    // 使用远程 URL 创建窗口，visible(false) 避免同步阻塞
+    let login_url = tauri::WebviewUrl::External(tauri::Url::parse(&login_url_str).unwrap());
 
-    log_msg("[create_login_window] 使用空白页创建窗口...");
-    let build_result = tauri::WebviewWindowBuilder::new(app, "login", blank_url)
+    log_msg("[create_login_window] 开始构建窗口...");
+    let build_result = tauri::WebviewWindowBuilder::new(app, "login", login_url)
         .title("AIDI 登录")
         .inner_size(360.0, 420.0)
         .decorations(true)
@@ -1139,7 +1138,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .skip_taskbar(true)
         .resizable(false)
         .center()
-        .visible(true)
+        .visible(false)  // 先不可见，避免阻塞
         .on_navigation(move |url| {
             // 监听登录成功：解析 hash 中的 invoke=login-success&token=xxx&user=yyy
             if let Some(fragment) = url.fragment() {
@@ -1229,19 +1228,11 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         },
     };
 
-    // 窗口创建成功后，显示窗口并跳转到远程登录页
+    // 窗口创建成功后，显示窗口
     let _ = login_window.center();
     let _ = login_window.show();
     let _ = login_window.set_focus();
-    log_msg("[create_login_window] 窗口已显示，准备跳转到远程登录页...");
-
-    // 使用 JavaScript 跳转到远程登录页（异步，不阻塞 UI）
-    let js_code = format!("window.location.href = '{}'", login_url_str);
-    if let Err(e) = login_window.eval(&js_code) {
-        log_msg(&format!("[create_login_window] 跳转失败: {:?}", e));
-    } else {
-        log_msg("[create_login_window] 跳转命令已执行");
-    }
+    log_msg("[create_login_window] 窗口已显示");
 
     // 设置窗口关闭拦截：隐藏而不是销毁
     let login_window_clone = login_window.clone();
@@ -1878,12 +1869,33 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 
 #[tauri::command]
 fn show_login_window(app: tauri::AppHandle) {
-    // 先尝试获取已存在的窗口
+    // 先隐藏其他所有窗口
+    let windows = app.webview_windows();
+    if let Some(w) = windows.get("main") {
+        let _ = w.hide();
+    }
+    if let Some(w) = windows.get("menu") {
+        let _ = w.hide();
+    }
+    if let Some(w) = windows.get("optimizer") {
+        let _ = w.hide();
+    }
+    if let Some(w) = windows.get("panel") {
+        let _ = w.hide();
+    }
+
+    // 显示登录窗口
     if let Some(w) = app.webview_windows().get("login") {
         log_msg(&format!("show_login_window: 登录窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
             w.is_visible().unwrap_or(false),
             w.outer_position().ok(),
             w.outer_size().ok()));
+
+        // 重新导航到远程登录页（解决窗口复用时内容为空的问题）
+        let login_url = build_login_url(&app);
+        log_msg(&format!("show_login_window: 重新导航到 {}", login_url));
+        let _ = w.navigate(tauri::Url::parse(&login_url).unwrap());
+
         let _ = w.center();
         let _ = w.show();
         #[cfg(target_os = "windows")]
