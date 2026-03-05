@@ -22,16 +22,30 @@ static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 
 /// 初始化日志文件（尝试多个位置以确保日志能够创建）
 fn init_log_file() {
+    // 先输出诊断信息到控制台（无论如何都会显示）
+    #[cfg(target_os = "windows")]
+    {
+        eprintln!("=== AIDI 日志诊断 ===");
+        eprintln!("桌面目录: {:?}", dirs::desktop_dir());
+        eprintln!("本地数据目录: {:?}", dirs::data_local_dir());
+        eprintln!("可执行文件路径: {:?}", std::env::current_exe());
+        eprintln!("当前用户: {}", whoami::username());
+    }
+
     // 尝试多个日志位置，按优先级排序
+    // 优先级：本地数据目录 > 桌面 > 可执行文件同级目录
     let log_locations: Vec<Option<std::path::PathBuf>> = vec![
-        // 优先：桌面
-        dirs::desktop_dir().map(|p| p.join("aidi-debug.log")),
-        // 备选：本地应用数据目录
+        // 优先：本地应用数据目录（比桌面更可靠，Windows 11 + OneDrive 可能导致桌面路径问题）
         dirs::data_local_dir().map(|p| {
             let dir = p.join("aidi-desktop");
-            let _ = std::fs::create_dir_all(&dir);
+            match std::fs::create_dir_all(&dir) {
+                Ok(_) => eprintln!("目录创建成功: {:?}", dir),
+                Err(e) => eprintln!("目录创建失败: {:?} - {}", dir, e),
+            }
             dir.join("debug.log")
         }),
+        // 备选：桌面（可能因 OneDrive 或权限问题失败）
+        dirs::desktop_dir().map(|p| p.join("aidi-debug.log")),
         // 最后：可执行文件同级目录
         std::env::current_exe().ok().and_then(|exe| {
             exe.parent().map(|p| p.join("aidi-debug.log"))
@@ -39,15 +53,15 @@ fn init_log_file() {
     ];
 
     for location in log_locations.into_iter().flatten() {
+        eprintln!("尝试创建日志文件: {:?}", location);
         match OpenOptions::new()
             .create(true)
             .append(true)
             .open(&location)
         {
             Ok(file) => {
+                eprintln!("日志文件创建成功: {:?}", location);
                 let _ = LOG_FILE.set(Mutex::new(file));
-                // 直接打印到 stdout，因为此时 LOG_FILE 可能还未设置
-                println!("日志文件创建成功: {:?}", location);
                 // 写入启动日志
                 log_msg(&format!("=== AIDI 启动 {} ===", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
                 log_msg(&format!("日志文件位置: {:?}", location));
@@ -2019,8 +2033,11 @@ pub fn run() {
                 let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
 
                 log_msg("[Tray] 开始创建托盘图标...");
-                if let Ok(icon) = tauri::image::Image::from_bytes(tray_icon_bytes) {
+                // 将托盘创建包装在独立块中，避免错误中断 setup
+                let tray_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    let icon = tauri::image::Image::from_bytes(tray_icon_bytes)?;
                     log_msg("[Tray] 图标加载成功");
+
                     // 初始状态默认为未登录，菜单显示"登录"和"退出"
                     let login_item = MenuItem::with_id(app, "login", "登录", true, None::<&str>)?;
                     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -2038,14 +2055,17 @@ pub fn run() {
                         .on_menu_event(|_tray, event| {
                             log_msg(&format!("[Tray] 菜单事件: {:?}", event.id));
                         })
-                        .build(app);
+                        .build(app)?;
 
-                    match tray {
-                        Ok(_) => log_msg("[Tray] 托盘图标创建成功"),
-                        Err(e) => log_msg(&format!("[Tray] 托盘创建失败: {:?}", e)),
-                    }
+                    log_msg("[Tray] 托盘图标创建成功");
+                    Ok(())
+                })();
 
-                    // 全局菜单事件监听（菜单重建后依然有效）
+                if let Err(e) = tray_result {
+                    log_msg(&format!("[Tray] 托盘创建失败: {:?}，继续初始化其他组件...", e));
+                }
+
+                // 全局菜单事件监听（菜单重建后依然有效）
                     app.on_menu_event(|app, event| match event.id.as_ref() {
                         "login" => {
                             // 显示登录窗口
