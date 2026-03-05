@@ -1670,17 +1670,18 @@ pub fn run() {
                 log_msg("应用 setup 开始");
 
                 // 监听 deep link 事件
+                let app_handle = app.handle().clone();
                 use tauri_plugin_deep_link::DeepLinkExt;
-                app.deep_link().on_open_url(|event| {
+                app.deep_link().on_open_url(move |event| {
                     let urls = event.urls();
                     log_msg(&format!("[Rust] Deep link 收到 URLs: {:?}", urls));
 
                     // 发送事件到所有窗口
-                    if let Some(windows) = app.webview_windows().get("login") {
-                        let _ = windows.emit("deep-link-received", urls);
+                    if let Some(window) = app_handle.webview_windows().get("login") {
+                        let _ = window.emit("deep-link-received", urls);
                     }
-                    if let Some(windows) = app.webview_windows().get("main") {
-                        let _ = windows.emit("deep-link-received", urls);
+                    if let Some(window) = app_handle.webview_windows().get("main") {
+                        let _ = window.emit("deep-link-received", urls);
                     }
                 });
                 log_msg("[Rust] Deep link 监听器已注册");
