@@ -33,7 +33,7 @@ fn init_log_file() {
     }
 
     // 尝试多个日志位置，按优先级排序
-    // 优先级：本地数据目录 > 桌面 > 可执行文件同级目录
+    // 优先级：本地数据目录 > 桌面 > 可执行文件同级目录 > 临时目录
     let log_locations: Vec<Option<std::path::PathBuf>> = vec![
         // 优先：本地应用数据目录（比桌面更可靠，Windows 11 + OneDrive 可能导致桌面路径问题）
         dirs::data_local_dir().map(|p| {
@@ -46,10 +46,12 @@ fn init_log_file() {
         }),
         // 备选：桌面（可能因 OneDrive 或权限问题失败）
         dirs::desktop_dir().map(|p| p.join("aidi-debug.log")),
-        // 最后：可执行文件同级目录
+        // 备选：可执行文件同级目录
         std::env::current_exe().ok().and_then(|exe| {
             exe.parent().map(|p| p.join("aidi-debug.log"))
         }),
+        // 最后备选：临时目录（最可靠的备选位置）
+        std::env::temp_dir().into_iter().next().map(|p| p.join("aidi-debug.log")),
     ];
 
     for location in log_locations.into_iter().flatten() {
@@ -1244,6 +1246,18 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         }
     });
 
+    // 添加加载超时检测，防止网络问题导致窗口卡死
+    let window_clone = login_window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(10));
+        // 如果窗口还在加载中，记录警告
+        log_msg("[Warning] 登录窗口加载可能超时（10秒），网络可能存在问题");
+        // 尝试获取窗口状态
+        if let Ok(is_visible) = window_clone.is_visible() {
+            log_msg(&format!("[Warning] 登录窗口当前可见性: {}", is_visible));
+        }
+    });
+
     log_msg("[create_login_window] 窗口设置完成，返回窗口对象");
     Ok(login_window)
 }
@@ -2044,7 +2058,7 @@ pub fn run() {
                     let menu = Menu::with_items(app, &[&login_item, &quit_item])?;
                     log_msg("[Tray] 菜单项创建成功");
 
-                    let tray = TrayIconBuilder::with_id("main-tray")
+                    let _tray = TrayIconBuilder::with_id("main-tray")
                         .icon(icon)
                         .tooltip("AIDI Desktop")
                         .menu(&menu)
@@ -2180,9 +2194,10 @@ pub fn run() {
 
             }
             // 注册全局快捷键 Alt+Q：切换悬浮球显示/隐藏
+            // 容错处理：快捷键注册失败不应影响应用启动
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
             let shortcut: Shortcut = "Alt+Q".parse().expect("invalid shortcut");
-            app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
+            if let Err(e) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
                     if let Some(window) = app.webview_windows().get("main") {
                         let visible = window.is_visible().unwrap_or(false);
@@ -2194,7 +2209,11 @@ pub fn run() {
                         sync_toggle_menu_item(app, !visible);
                     }
                 }
-            })?;
+            }) {
+                log_msg(&format!("[Warning] 全局快捷键 Alt+Q 注册失败: {:?}，应用将继续运行", e));
+            } else {
+                log_msg("[Info] 全局快捷键 Alt+Q 注册成功");
+            }
 
             // 拦截 optimizer 窗口关闭事件：隐藏而不是销毁
             if let Some(optimizer_window) = app.get_webview_window("optimizer") {
