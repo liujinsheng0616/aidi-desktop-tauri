@@ -1212,6 +1212,15 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         }
     });
 
+    // Windows 上需要立即显示窗口，否则可能不会显示
+    #[cfg(target_os = "windows")]
+    {
+        log_msg("[create_login_window] Windows: 立即显示窗口");
+        let _ = login_window.center();
+        let _ = login_window.show();
+        let _ = login_window.set_focus();
+    }
+
     log_msg("[create_login_window] 窗口设置完成，返回窗口对象");
     Ok(login_window)
 }
