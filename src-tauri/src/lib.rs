@@ -1816,6 +1816,10 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 fn show_login_window(app: tauri::AppHandle) {
     // 先尝试获取已存在的窗口
     if let Some(w) = app.webview_windows().get("login") {
+        log_msg(&format!("show_login_window: 登录窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
+            w.is_visible().unwrap_or(false),
+            w.outer_position().ok(),
+            w.outer_size().ok()));
         let _ = w.center();
         let _ = w.show();
         #[cfg(target_os = "windows")]
@@ -1826,15 +1830,32 @@ fn show_login_window(app: tauri::AppHandle) {
             let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
         }
         let _ = w.set_focus();
-        log_msg("show_login_window: 登录窗口已显示");
+        log_msg(&format!("show_login_window: 显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
+            w.is_visible().unwrap_or(false),
+            w.outer_position().ok(),
+            w.outer_size().ok()));
     } else {
         // 窗口不存在，动态创建
         log_msg("show_login_window: 登录窗口不存在，尝试动态创建...");
         match create_login_window(&app) {
             Ok(w) => {
+                log_msg(&format!("show_login_window: 窗口创建成功, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                    w.is_visible().unwrap_or(false),
+                    w.outer_position().ok(),
+                    w.outer_size().ok()));
+                let _ = w.center();
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri::{LogicalSize, Size};
+                    let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                    let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                }
                 let _ = w.show();
                 let _ = w.set_focus();
-                log_msg("show_login_window: 登录窗口已动态创建并显示");
+                log_msg(&format!("show_login_window: 显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                    w.is_visible().unwrap_or(false),
+                    w.outer_position().ok(),
+                    w.outer_size().ok()));
             }
             Err(e) => {
                 log_msg(&format!("show_login_window: 创建登录窗口失败: {:?}", e));
@@ -1987,6 +2008,10 @@ pub fn run() {
                             // 显示登录窗口
                             log_msg("托盘菜单点击: 登录");
                             if let Some(w) = app.webview_windows().get("login") {
+                                log_msg(&format!("托盘登录: 窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                                    w.is_visible().unwrap_or(false),
+                                    w.outer_position().ok(),
+                                    w.outer_size().ok()));
                                 let _ = w.center();
                                 let _ = w.show();
                                 #[cfg(target_os = "windows")]
@@ -1996,9 +2021,37 @@ pub fn run() {
                                     let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
                                 }
                                 let _ = w.set_focus();
-                                log_msg("登录窗口已显示（从托盘）");
+                                log_msg(&format!("托盘登录: 显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                                    w.is_visible().unwrap_or(false),
+                                    w.outer_position().ok(),
+                                    w.outer_size().ok()));
                             } else {
-                                log_msg("错误: 找不到登录窗口！");
+                                // 窗口不存在，动态创建
+                                log_msg("托盘登录: 窗口不存在，动态创建...");
+                                match create_login_window(app) {
+                                    Ok(w) => {
+                                        log_msg(&format!("托盘登录: 窗口创建成功, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                                            w.is_visible().unwrap_or(false),
+                                            w.outer_position().ok(),
+                                            w.outer_size().ok()));
+                                        let _ = w.center();
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            use tauri::{LogicalSize, Size};
+                                            let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                                            let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                                        }
+                                        let _ = w.show();
+                                        let _ = w.set_focus();
+                                        log_msg(&format!("托盘登录: 显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                                            w.is_visible().unwrap_or(false),
+                                            w.outer_position().ok(),
+                                            w.outer_size().ok()));
+                                    }
+                                    Err(e) => {
+                                        log_msg(&format!("托盘登录: 创建窗口失败: {:?}", e));
+                                    }
+                                }
                             }
                         }
                         "toggle" => {
@@ -2108,6 +2161,10 @@ pub fn run() {
                 if !IS_LOGGED_IN.load(Ordering::SeqCst) {
                     log_msg("前端 3 秒内未响应，自动显示登录窗口");
                     if let Some(w) = app_handle.webview_windows().get("login") {
+                        log_msg(&format!("login 窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                            w.is_visible().unwrap_or(false),
+                            w.outer_position().ok(),
+                            w.outer_size().ok()));
                         let _ = w.center();
                         let _ = w.show();
                         #[cfg(target_os = "windows")]
@@ -2117,14 +2174,33 @@ pub fn run() {
                             let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
                         }
                         let _ = w.set_focus();
+                        log_msg(&format!("login 窗口显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                            w.is_visible().unwrap_or(false),
+                            w.outer_position().ok(),
+                            w.outer_size().ok()));
                     } else {
                         // login 窗口不存在，动态创建
                         log_msg("login 窗口不存在，动态创建...");
                         match create_login_window(&app_handle) {
                             Ok(w) => {
+                                log_msg(&format!("login 窗口创建成功, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                                    w.is_visible().unwrap_or(false),
+                                    w.outer_position().ok(),
+                                    w.outer_size().ok()));
+                                // Windows 上先居中再显示
+                                let _ = w.center();
+                                #[cfg(target_os = "windows")]
+                                {
+                                    use tauri::{LogicalSize, Size};
+                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                                }
                                 let _ = w.show();
                                 let _ = w.set_focus();
-                                log_msg("login 窗口已动态创建并显示");
+                                log_msg(&format!("login 窗口显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
+                                    w.is_visible().unwrap_or(false),
+                                    w.outer_position().ok(),
+                                    w.outer_size().ok()));
                             }
                             Err(e) => {
                                 log_msg(&format!("创建 login 窗口失败: {:?}", e));
