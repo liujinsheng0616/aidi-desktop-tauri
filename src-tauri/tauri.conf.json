@@ -46,7 +46,7 @@
       {
         "label": "login",
         "title": "AIDI 登录",
-        "url": "{{APP_DOMAIN}}/aidi-desktop/login.html",
+        "url": "https://microsapptest.yadea.com.cn/aidi-desktop/login.html",
         "width": 360,
         "height": 420,
         "decorations": true,
