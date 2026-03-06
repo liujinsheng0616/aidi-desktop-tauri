@@ -58,20 +58,36 @@ async function handleCode(code: string) {
 
     await logDebug('[Login] 登录成功，正在保存登录信息到文件...')
     // 调用 Rust 命令保存登录信息到 auth.json（供主窗口读取）
-    await invoke('save_login_info', {
-      token,
-      userId: user.id,
-      userName: user.name,
-      userJson: JSON.stringify(user)
-    })
-    await logDebug('[Login] 登录信息已保存到文件')
+    // Windows/WebView2 外部页面 invoke 可能失败，用 try/catch 包裹
+    try {
+      await invoke('save_login_info', {
+        token,
+        userId: user.id,
+        userName: user.name,
+        userJson: JSON.stringify(user)
+      })
+      await logDebug('[Login] 登录信息已保存到文件')
+    } catch (e) {
+      await logDebug(`[Login] save_login_info invoke 失败（Windows 兜底）: ${e}`)
+    }
+
+    // 通过 URL 导航触发 Rust on_navigation 回调（兼容 Windows/WebView2）
+    // Windows 上 invoke 在外部域名页面可能被拦截，此方式可靠触发 Rust 端登录成功处理
+    const encodedToken = encodeURIComponent(token)
+    const encodedUser = encodeURIComponent(JSON.stringify(user))
+    await logDebug('[Login] 通过 URL 导航触发 Rust on_navigation 兜底...')
+    window.location.href = `about:blank#invoke=login-success&token=${encodedToken}&user=${encodedUser}`
 
     await logDebug('[Login] 等待 800ms 后调用 on_login_success')
     await new Promise(r => setTimeout(r, 800))
 
-    // 直接调用 Rust 命令处理登录完成，不依赖 main 窗口的事件监听
-    await invoke('on_login_success')
-    await logDebug('[Login] on_login_success 调用完成')
+    // macOS/正常环境直接走 invoke（与 URL 导航双保险，幂等安全）
+    try {
+      await invoke('on_login_success')
+      await logDebug('[Login] on_login_success 调用完成')
+    } catch (e) {
+      await logDebug(`[Login] on_login_success invoke 失败（已通过 URL 兜底）: ${e}`)
+    }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : '登录失败，请重试'
     await logDebug(`[Login] handleCode 错误: ${errMsg}`)
