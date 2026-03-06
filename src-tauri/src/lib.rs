@@ -1117,14 +1117,24 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         .build()
 }
 
+// 登录窗口创建状态标志
+static LOGIN_WINDOW_CREATING: AtomicBool = AtomicBool::new(false);
+
 /// 创建登录窗口（动态创建，加载远程登录页）
 fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
+    // 检查是否正在创建中
+    if LOGIN_WINDOW_CREATING.load(Ordering::SeqCst) {
+        log_msg("[create_login_window] 窗口正在创建中，跳过...");
+        return Err(tauri::Error::WindowNotFound);
+    }
+
+    LOGIN_WINDOW_CREATING.store(true, Ordering::SeqCst);
     log_msg("[create_login_window] 开始创建登录窗口...");
     let app_handle = app.clone();
     let login_url_str = build_login_url(app);
     log_msg(&format!("[create_login_window] 登录 URL: {}", login_url_str));
 
-    // 先用 about:blank 创建窗口，避免 build() 阻塞
+    // 先用 about:blank 创建窗口，避免 build() 郻塞
     let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
 
     log_msg("[create_login_window] 使用 about:blank 构建窗口...");
@@ -1138,7 +1148,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .skip_taskbar(true)
         .resizable(false)
         .center()
-        .visible(false)  // 先不可见，避免阻塞
+        .visible(true)
         .on_navigation(move |url| {
             // 监听登录成功：解析 hash 中的 invoke=login-success&token=xxx&user=yyy
             if let Some(fragment) = url.fragment() {
@@ -1875,7 +1885,7 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 }
 
 #[tauri::command]
-fn show_login_window(app: tauri::AppHandle) {
+async fn show_login_window(app: tauri::AppHandle) {
     // 先隐藏其他所有窗口
     let windows = app.webview_windows();
     if let Some(w) = windows.get("main") {
@@ -1891,14 +1901,11 @@ fn show_login_window(app: tauri::AppHandle) {
         let _ = w.hide();
     }
 
-    // 显示登录窗口
+    // 检查登录窗口是否已存在
     if let Some(w) = app.webview_windows().get("login") {
-        log_msg(&format!("show_login_window: 登录窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
-            w.is_visible().unwrap_or(false),
-            w.outer_position().ok(),
-            w.outer_size().ok()));
+        log_msg(&format!("show_login_window: 登录窗口已存在, 可见性: {}", w.is_visible().unwrap_or(false)));
 
-        // 重新导航到远程登录页（解决窗口复用时内容为空的问题）
+        // 重新导航到远程登录页
         let login_url = build_login_url(&app);
         log_msg(&format!("show_login_window: 重新导航到 {}", login_url));
         let _ = w.navigate(tauri::Url::parse(&login_url).unwrap());
@@ -1907,43 +1914,34 @@ fn show_login_window(app: tauri::AppHandle) {
         let _ = w.show();
         #[cfg(target_os = "windows")]
         {
-            // Windows 上强制刷新窗口：先调整大小再恢复
             use tauri::{LogicalSize, Size};
             let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
             let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
         }
         let _ = w.set_focus();
-        log_msg(&format!("show_login_window: 显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
-            w.is_visible().unwrap_or(false),
-            w.outer_position().ok(),
-            w.outer_size().ok()));
     } else {
-        // 窗口不存在，动态创建
+        // 窗口不存在，在后台线程创建
         log_msg("show_login_window: 登录窗口不存在，尝试动态创建...");
-        match create_login_window(&app) {
-            Ok(w) => {
-                log_msg(&format!("show_login_window: 窗口创建成功, 可见性: {}, 位置: {:?}, 大小: {:?}",
-                    w.is_visible().unwrap_or(false),
-                    w.outer_position().ok(),
-                    w.outer_size().ok()));
-                let _ = w.center();
-                #[cfg(target_os = "windows")]
-                {
-                    use tauri::{LogicalSize, Size};
-                    let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
-                    let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+        let app_clone = app.clone();
+        tokio::task::spawn_blocking(move || {
+            match create_login_window(&app_clone) {
+                Ok(w) => {
+                    log_msg(&format!("show_login_window: 窗口创建成功"));
+                    let _ = w.center();
+                    #[cfg(target_os = "windows")]
+                    {
+                        use tauri::{LogicalSize, Size};
+                        let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                        let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                    }
+                    let _ = w.show();
+                    let _ = w.set_focus();
                 }
-                let _ = w.show();
-                let _ = w.set_focus();
-                log_msg(&format!("show_login_window: 显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
-                    w.is_visible().unwrap_or(false),
-                    w.outer_position().ok(),
-                    w.outer_size().ok()));
+                Err(e) => {
+                    log_msg(&format!("show_login_window: 创建窗口失败: {:?}", e));
+                }
             }
-            Err(e) => {
-                log_msg(&format!("show_login_window: 创建登录窗口失败: {:?}", e));
-            }
-        }
+        });
     }
 }
 
