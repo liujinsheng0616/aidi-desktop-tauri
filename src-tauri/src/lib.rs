@@ -1119,6 +1119,40 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
             }
             true
         })
+        // Windows WebView2 的 hash-only 导航不触发 NavigationStarting 事件，因此 on_navigation 不被调用。
+        // 通过 initialization_script 监听 hashchange 事件，直接 invoke Tauri 命令作为补充方案。
+        // 与现有 on_navigation 回调共存不冲突：macOS 走 on_navigation，Windows 走此脚本。
+        .initialization_script(r#"
+(function() {
+    var _ALLOWED = ['hide_menu','show_optimizer_window','hide_optimizer_window',
+        'show_main_window','hide_main_window','show_login_window','hide_login_window',
+        'show_menu_window','menu_expand','menu_collapse','update_settings'];
+    function handleHash() {
+        var h = window.location.hash;
+        if (!h || h.indexOf('invoke=') === -1) return;
+        var params = {};
+        h.replace(/^#/, '').split('&').forEach(function(pair) {
+            var idx = pair.indexOf('=');
+            if (idx > 0) params[decodeURIComponent(pair.slice(0,idx))] = decodeURIComponent(pair.slice(idx+1));
+        });
+        var cmd = params['invoke'];
+        if (!cmd || _ALLOWED.indexOf(cmd) === -1) return;
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+        var args = {};
+        if (cmd === 'update_settings') {
+            ['ball_size','opacity','color_theme','theme_mode'].forEach(function(k){
+                if (params[k] !== undefined) args[k] = params[k];
+            });
+        } else if (cmd === 'menu_expand' || cmd === 'menu_collapse') {
+            if (params['opens_left'] !== undefined) args['opens_left'] = params['opens_left'] === 'true';
+        }
+        window.__TAURI_INTERNALS__.invoke(cmd, args)
+            .catch(function(e){ console.warn('[Menu] invoke failed:', cmd, e); });
+    }
+    window.addEventListener('hashchange', handleHash);
+    handleHash();
+})();
+"#)
         .build()
 }
 
@@ -1409,6 +1443,10 @@ fn handle_login_success(app: &tauri::AppHandle) {
         tauri::async_runtime::spawn(async move {
             let show_result = main_window_clone.show();
             log_msg(&format!("handle_login_success: main_window.show() 结果: {:?}", show_result));
+            // Windows 上 SetWindowRgn 在窗口隐藏后重新显示时可能失效，重新应用圆形遮罩
+            let ball_size_val = *BALL_SIZE.lock().unwrap();
+            let full_size = ball_size_val + BALL_PADDING * 2;
+            apply_circular_window_mask(&main_window_clone, full_size);
             let visible = main_window_clone.is_visible().unwrap_or(false);
             log_msg(&format!("handle_login_success: main 窗口显示后可见性: {}", visible));
 

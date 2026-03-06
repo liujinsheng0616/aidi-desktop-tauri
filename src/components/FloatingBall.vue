@@ -133,7 +133,9 @@ function handleMouseMove(e: MouseEvent) {
   }
 
   // 使用增量更新（后端原子操作，更快速）
-  invoke('move_window_by', { dx, dy })
+  // 乘以 devicePixelRatio 将逻辑像素转换为物理像素，与 outer_position() 的坐标体系一致
+  const dpr = window.devicePixelRatio || 1
+  invoke('move_window_by', { dx: Math.round(dx * dpr), dy: Math.round(dy * dpr) })
 }
 
 // 鼠标进入 - 触发吸附弹出
