@@ -1037,7 +1037,12 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                         sync_toggle_menu_item(&app2, false);
                                     }
                                 }
-                                "show_login_window" => show_login_window(app2),
+                                "show_login_window" => {
+                                    let app3 = app2.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        show_login_window(app3).await;
+                                    });
+                                }
                                 "hide_login_window" => {
                                     if let Some(w) = app2.webview_windows().get("login") {
                                         let _ = w.hide();
@@ -1234,6 +1239,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         },
         Err(e) => {
             log_msg(&format!("[create_login_window] 窗口创建失败: {:?}", e));
+            LOGIN_WINDOW_CREATING.store(false, Ordering::SeqCst);
             return Err(e);
         },
     };
@@ -1273,6 +1279,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         }
     });
 
+    LOGIN_WINDOW_CREATING.store(false, Ordering::SeqCst);
     log_msg("[create_login_window] 窗口设置完成，返回窗口对象");
     Ok(login_window)
 }
