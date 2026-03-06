@@ -1154,26 +1154,30 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .resizable(false)
         .center()
         .visible(true)
-        // 拦截远程登录页的 hash-only 变更（window.location.hash = '#invoke=login-success...'）
-        // hash-only 变更不触发 WebView2 的 NavigationStarting，无法被 on_navigation 捕获
-        // 此脚本将其转换为完整 URL 跳转，从而触发 on_navigation
+        // 注入脚本：监听 hash 变更，检测到登录成功后直接 invoke 通知 Rust
         .initialization_script(r#"
             (function() {
-                function tryRedirect() {
+                var _handled = false;
+                function checkLoginSuccess() {
+                    if (_handled) return;
                     var h = window.location.hash;
-                    if (h && h.indexOf('invoke=login-success') !== -1) {
-                        var fullUrl = window.location.origin + '/aidi-login-success' + (h.startsWith('#') ? h : '#' + h);
-                        window.location.href = fullUrl;
-                    }
+                    if (!h || h.indexOf('invoke=login-success') === -1) return;
+                    _handled = true;
+                    clearInterval(_t);
+                    // 解析 hash 参数
+                    var params = {};
+                    h.replace(/^#/, '').split('&').forEach(function(pair) {
+                        var idx = pair.indexOf('=');
+                        if (idx > 0) params[decodeURIComponent(pair.slice(0, idx))] = decodeURIComponent(pair.slice(idx + 1));
+                    });
+                    var token = params['token'] || '';
+                    var user = params['user'] || '';
+                    // 直接 invoke 带参通知 Rust（initialization_script 注入时 IPC bridge 已就绪）
+                    window.__TAURI_INTERNALS__.invoke('on_login_success', { token: token, user: user })
+                        .catch(function(e) { console.warn('[AIDI] on_login_success failed:', e); });
                 }
-                window.addEventListener('hashchange', tryRedirect);
-                // 兜底轮询：防止某些实现直接修改 hash 而不触发 hashchange 事件
-                var _t = setInterval(function() {
-                    if (window.location.hash.indexOf('invoke=login-success') !== -1) {
-                        clearInterval(_t);
-                        tryRedirect();
-                    }
-                }, 300);
+                window.addEventListener('hashchange', checkLoginSuccess);
+                var _t = setInterval(checkLoginSuccess, 300);
             })();
         "#)
         .on_navigation(move |url| {
@@ -2038,10 +2042,32 @@ fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
 }
 
 /// 登录成功后由 login 窗口调用
-/// 关闭登录窗口、更新托盘菜单、通知主窗口初始化
+/// token/user 可选：Windows 注入脚本带参传入并直接保存，macOS 不传则读 auth.json
 #[tauri::command]
-async fn on_login_success(app: tauri::AppHandle) {
-    log_msg("on_login_success: 登录成功");
+async fn on_login_success(app: tauri::AppHandle, token: Option<String>, user: Option<String>) {
+    log_msg(&format!("on_login_success: token={}, user_len={}",
+        token.as_deref().map(|t| &t[..t.len().min(10)]).unwrap_or("none"),
+        user.as_deref().map(|u| u.len()).unwrap_or(0)
+    ));
+    // 带参时直接保存 auth.json
+    if let (Some(token_val), Some(user_val)) = (&token, &user) {
+        if let Some(data_dir) = dirs::data_local_dir() {
+            let aidi_dir = data_dir.join("AIDI Desktop");
+            let _ = std::fs::create_dir_all(&aidi_dir);
+            let user_json: serde_json::Value = serde_json::from_str(user_val).unwrap_or(serde_json::Value::Null);
+            let content = serde_json::json!({
+                "token": token_val,
+                "userId": user_json["id"].as_str().unwrap_or(""),
+                "userName": user_json["name"].as_str().unwrap_or(""),
+                "user": user_val,
+                "updatedAt": chrono::Local::now().to_rfc3339(),
+            });
+            match std::fs::write(aidi_dir.join("auth.json"), content.to_string()) {
+                Ok(_) => log_msg("on_login_success: auth.json 已保存"),
+                Err(e) => log_msg(&format!("on_login_success: auth.json 保存失败: {}", e)),
+            }
+        }
+    }
     handle_login_success(&app);
 }
 
