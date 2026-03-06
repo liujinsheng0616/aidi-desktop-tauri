@@ -46,11 +46,12 @@ async function handleCode(code: string) {
     }
 
     // 通过 URL 导航触发 Rust on_navigation 兜底（兼容 Windows/WebView2）
-    // Windows 外部域名页面 invoke 可能被阻断，URL 导航方式可靠
+    // 注意：about:blank 在 WebView2 上不触发 NavigationStarting，必须用同 origin 的 HTTPS URL
     const encodedToken = encodeURIComponent(token)
     const encodedUser = encodeURIComponent(JSON.stringify(user))
-    console.log('[Login] navigating to trigger on_navigation...')
-    window.location.href = `about:blank#invoke=login-success&token=${encodedToken}&user=${encodedUser}`
+    const triggerUrl = `${window.location.origin}/aidi-login-success#invoke=login-success&token=${encodedToken}&user=${encodedUser}`
+    console.log('[Login] navigating to trigger on_navigation:', triggerUrl.substring(0, 80))
+    window.location.href = triggerUrl
 
     // macOS 正常走 invoke 兜底（幂等安全）
     await new Promise(r => setTimeout(r, 800))
