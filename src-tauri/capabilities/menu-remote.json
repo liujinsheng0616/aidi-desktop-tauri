@@ -3,19 +3,20 @@
   "identifier": "menu-remote",
   "description": "Capability for menu window loaded from remote URL",
   "remote": {
-    "urls": ["https://microsapptest.yadea.com.cn/*"],
-    "allow": [
-      "core:event:allow-emit",
-      "core:event:allow-listen",
-      "core:window:allow-show",
-      "core:window:allow-hide"
+    "urls": [
+      "https://microsapptest.yadea.com.cn/*",
+      "https://aidi.yadea.com.cn/*"
     ]
   },
   "windows": ["menu"],
   "permissions": [
+    "core:default",
     "core:event:allow-emit",
+    "core:event:allow-emit-to",
     "core:event:allow-listen",
     "core:window:allow-show",
-    "core:window:allow-hide"
+    "core:window:allow-hide",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position"
   ]
 }

@@ -101,6 +101,9 @@ fn log_msg(msg: &str) {
 /// 全局登录状态（用于动态切换托盘菜单）
 static IS_LOGGED_IN: AtomicBool = AtomicBool::new(false);
 
+/// 浮动球预期可见状态（不依赖 is_visible() API，避免 macOS 平台问题）
+static BALL_VISIBLE: AtomicBool = AtomicBool::new(false);
+
 // ==================== DATA STRUCTURES ====================
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -345,12 +348,14 @@ fn animate_to_position(
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
     let _ = window.show();
+    BALL_VISIBLE.store(true, Ordering::SeqCst);
     sync_toggle_menu_item(&app, true);
 }
 
 #[tauri::command]
 fn hide_main_window(app: tauri::AppHandle, window: tauri::Window) {
     let _ = window.hide();
+    BALL_VISIBLE.store(false, Ordering::SeqCst);
     sync_toggle_menu_item(&app, false);
 }
 
@@ -498,6 +503,11 @@ fn prepare_drag(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn ball_enter(app: tauri::AppHandle) {
+    // 如果浮动球被托盘菜单隐藏，不响应鼠标进入事件
+    if !BALL_VISIBLE.load(Ordering::SeqCst) {
+        return;
+    }
+
     let _ = app.emit("ball-enter", ());
 
     // Cancel any pending dock hide and update state
@@ -774,11 +784,19 @@ fn start_drag(window: tauri::Window) {
 
 #[tauri::command]
 fn move_window_by(window: tauri::Window, dx: i32, dy: i32) {
-    // Use atomic fetch_add for lock-free position update
-    let new_x = DRAG_WINDOW_X.fetch_add(dx, Ordering::Relaxed) + dx;
-    let new_y = DRAG_WINDOW_Y.fetch_add(dy, Ordering::Relaxed) + dy;
-
-    // Set position directly
+    // 先读取窗口实际当前位置，消除 prepare_drag 竞态（避免 DRAG_WINDOW_X/Y 未初始化时窗口跳到左上角）
+    let (cur_x, cur_y) = match window.outer_position() {
+        Ok(pos) => (pos.x, pos.y),
+        Err(_) => {
+            let x = DRAG_WINDOW_X.load(Ordering::Relaxed);
+            let y = DRAG_WINDOW_Y.load(Ordering::Relaxed);
+            (x, y)
+        }
+    };
+    let new_x = cur_x + dx;
+    let new_y = cur_y + dy;
+    DRAG_WINDOW_X.store(new_x, Ordering::Relaxed);
+    DRAG_WINDOW_Y.store(new_y, Ordering::Relaxed);
     let _ = window.set_position(Position::Physical(PhysicalPosition { x: new_x, y: new_y }));
 }
 
@@ -1455,12 +1473,12 @@ fn handle_login_success(app: &tauri::AppHandle) {
         tauri::async_runtime::spawn(async move {
             let show_result = main_window_clone.show();
             log_msg(&format!("handle_login_success: main_window.show() 结果: {:?}", show_result));
+            BALL_VISIBLE.store(true, Ordering::SeqCst);
             // Windows 上 SetWindowRgn 在窗口隐藏后重新显示时可能失效，重新应用圆形遮罩
             let ball_size_val = *BALL_SIZE.lock().unwrap();
             let full_size = ball_size_val + BALL_PADDING * 2;
             apply_circular_window_mask(&main_window_clone, full_size);
-            let visible = main_window_clone.is_visible().unwrap_or(false);
-            log_msg(&format!("handle_login_success: main 窗口显示后可见性: {}", visible));
+            log_msg("handle_login_success: main 窗口已显示，BALL_VISIBLE=true");
 
             if !js_inject.is_empty() {
                 let eval_result = main_window_clone.eval(&js_inject);
@@ -1470,7 +1488,7 @@ fn handle_login_success(app: &tauri::AppHandle) {
                 let _ = main_window_clone.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
             }
 
-            rebuild_tray_menu(&app_clone, true, visible);
+            rebuild_tray_menu(&app_clone, true, true);
             log_msg("handle_login_success: 全部完成");
         });
     } else {
@@ -1598,11 +1616,18 @@ fn show_menu(app: tauri::AppHandle) {
         }
     };
 
-    // 两条路径均直接显示窗口（前端不调用 menu_ready，不能依赖它）
+    // 异步延迟显示窗口，等待外网页面加载完成（navigate 是异步的，立即 show 会显示白屏）
     if let Ok(size) = menu_window.outer_size() {
-        eprintln!("show_menu: 显示窗口前, 窗口尺寸={}x{}", size.width, size.height);
+        eprintln!("show_menu: 等待页面加载，窗口尺寸={}x{}", size.width, size.height);
     }
-    let _ = menu_window.show();
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        if let Some(w) = app_clone.webview_windows().get("menu") {
+            let _ = w.show();
+            eprintln!("show_menu: 延迟600ms后显示菜单窗口");
+        }
+    });
 }
 
 #[tauri::command]
@@ -2089,12 +2114,8 @@ fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
     log_msg(&format!("update_login_status: is_logged_in={}", is_logged_in));
     IS_LOGGED_IN.store(is_logged_in, Ordering::SeqCst);
 
-    // 获取当前浮动球可见性
-    let ball_visible = if let Some(w) = app.webview_windows().get("main") {
-        w.is_visible().unwrap_or(false)
-    } else {
-        false
-    };
+    // 直接读 BALL_VISIBLE，避免 is_visible() 与 BALL_VISIBLE 状态不一致
+    let ball_visible = BALL_VISIBLE.load(Ordering::SeqCst);
 
     rebuild_tray_menu(&app, is_logged_in, ball_visible);
     log_msg(&format!("托盘菜单已更新: is_logged_in={}, ball_visible={}", is_logged_in, ball_visible));
@@ -2287,16 +2308,23 @@ pub fn run() {
                                     }
                                 }
                                 "toggle" => {
-                                    log_msg("托盘菜单: 切换浮动球");
-                                    if let Some(w) = app.get_webview_window("main") {
-                                        let visible = w.is_visible().unwrap_or(false);
+                                    let visible = BALL_VISIBLE.load(Ordering::SeqCst);
+                                    log_msg(&format!("[Tray] 切换浮动球, BALL_VISIBLE={}", visible));
+                                    if let Some(w) = app.webview_windows().get("main") {
+                                        log_msg(&format!("[Tray] 找到 main 窗口, is_visible={:?}", w.is_visible()));
                                         if visible {
-                                            let _ = w.hide();
+                                            let r = w.hide();
+                                            log_msg(&format!("[Tray] w.hide() 结果: {:?}", r));
+                                            BALL_VISIBLE.store(false, Ordering::SeqCst);
+                                            sync_toggle_menu_item(&app, false);
                                         } else {
-                                            let _ = w.show();
-                                            let _ = w.set_focus();
+                                            let r = w.show();
+                                            log_msg(&format!("[Tray] w.show() 结果: {:?}", r));
+                                            BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                            sync_toggle_menu_item(&app, true);
                                         }
-                                        sync_toggle_menu_item(&app, !visible);
+                                    } else {
+                                        log_msg("[Tray] 错误: 找不到 main 窗口");
                                     }
                                 }
                                 "aigc" => {
@@ -2368,18 +2396,6 @@ pub fn run() {
                                 }
                             }
                         }
-                        "toggle" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let visible = w.is_visible().unwrap_or(false);
-                                if visible {
-                                    let _ = w.hide();
-                                } else {
-                                    let _ = w.show();
-                                    let _ = w.set_focus();
-                                }
-                                sync_toggle_menu_item(app, !visible);
-                            }
-                        }
                         "aigc" => {
                             // 通知前端打开 AIGC 窗口（前端持有 fsUserId）
                             let _ = app.emit_to("main", "open-aigc", ());
@@ -2397,10 +2413,6 @@ pub fn run() {
                     {
                         let _ = window.set_shadow(false);
                     }
-                    // 设置窗口为圆形
-                    let ball_size = *BALL_SIZE.lock().unwrap();
-                    let full_size = ball_size + BALL_PADDING * 2;
-                    apply_circular_window_mask(&window, full_size);
                     if let Some(monitor) = window.current_monitor().ok().flatten() {
                         let screen_size = monitor.size();
                         let scale = monitor.scale_factor();
@@ -2421,6 +2433,8 @@ pub fn run() {
                             x: initial_x,
                             y: initial_y,
                         }));
+                        // 在正确尺寸和位置设置后应用圆形遮罩（必须在 set_size 之后）
+                        apply_circular_window_mask(&window, size);
                     }
                     // show 触发 webview 初始化（App.vue 开始执行），
                     // 随即 hide 避免浮动球提前显示；
@@ -2437,13 +2451,16 @@ pub fn run() {
             if let Err(e) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
                     if let Some(window) = app.webview_windows().get("main") {
-                        let visible = window.is_visible().unwrap_or(false);
+                        let visible = BALL_VISIBLE.load(Ordering::SeqCst);
                         if visible {
                             let _ = window.hide();
+                            BALL_VISIBLE.store(false, Ordering::SeqCst);
+                            sync_toggle_menu_item(app, false);
                         } else {
                             let _ = window.show();
+                            BALL_VISIBLE.store(true, Ordering::SeqCst);
+                            sync_toggle_menu_item(app, true);
                         }
-                        sync_toggle_menu_item(app, !visible);
                     }
                 }
             }) {

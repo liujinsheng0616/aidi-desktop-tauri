@@ -36,7 +36,7 @@ let dragStartMouseX = 0 // 拖拽开始时的鼠标位置
 let dragStartMouseY = 0
 let hasMoved = false
 const CLICK_THRESHOLD = 5 // 移动超过5像素认为是拖拽
-const CLICK_TIME_THRESHOLD = 200 // 按下超过200ms认为是拖拽
+const CLICK_TIME_THRESHOLD = 350 // 按下超过350ms认为是拖拽（Windows IPC延迟较大，200ms过严）
 
 // 双击检测
 let lastClickTime = 0
