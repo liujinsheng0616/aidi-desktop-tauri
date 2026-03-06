@@ -12,9 +12,13 @@ export interface UserInfo {
   fsUserId: string | null
 }
 
-// 简单的日志函数
-function logAuth(message: string) {
+// 写入 Rust 日志文件
+async function logAuth(message: string) {
   console.log(`[Auth] ${message}`)
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('log_debug', { message: `[Auth] ${message}` })
+  } catch {}
 }
 
 // 接口1：code → userId

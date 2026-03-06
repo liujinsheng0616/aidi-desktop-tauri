@@ -22,14 +22,28 @@ function retryLogin() {
   window.location.href = '/login.html'
 }
 
+async function log(msg: string) {
+  try { await invoke('log_debug', { message: msg }) } catch {}
+}
+
 async function handleCode(code: string) {
-  console.log('[Login] handleCode, code=', code.substring(0, 15))
+  await log(`[Login] handleCode start, code=${code.substring(0, 15)}`)
   status.value = 'processing'
   try {
+    await log('[Login] fetchUserIdByCode...')
     const userId = await fetchUserIdByCode(code)
+    await log(`[Login] userId=${userId}`)
+
+    await log('[Login] fetchTokenByUserId...')
     const token = await fetchTokenByUserId(userId)
+    await log(`[Login] token=${token.substring(0, 10)}...`)
+
     setToken(token)
+
+    await log('[Login] fetchCurrentUser...')
     const user = await fetchCurrentUser(token)
+    await log(`[Login] user=${JSON.stringify(user).substring(0, 60)}`)
+
     setUser(user)
     status.value = 'success'
 
@@ -41,8 +55,9 @@ async function handleCode(code: string) {
         userName: user.name,
         userJson: JSON.stringify(user)
       })
+      await log('[Login] save_login_info ok')
     } catch (e) {
-      console.warn('[Login] save_login_info invoke failed:', e)
+      await log(`[Login] save_login_info failed: ${e}`)
     }
 
     // 通过 URL 导航触发 Rust on_navigation 兜底（兼容 Windows/WebView2）
@@ -50,19 +65,20 @@ async function handleCode(code: string) {
     const encodedToken = encodeURIComponent(token)
     const encodedUser = encodeURIComponent(JSON.stringify(user))
     const triggerUrl = `${window.location.origin}/aidi-login-success#invoke=login-success&token=${encodedToken}&user=${encodedUser}`
-    console.log('[Login] navigating to trigger on_navigation:', triggerUrl.substring(0, 80))
+    await log(`[Login] navigating: ${triggerUrl.substring(0, 80)}`)
     window.location.href = triggerUrl
 
     // macOS 正常走 invoke 兜底（幂等安全）
     await new Promise(r => setTimeout(r, 800))
     try {
       await invoke('on_login_success')
+      await log('[Login] on_login_success ok')
     } catch (e) {
-      console.warn('[Login] on_login_success invoke failed (URL fallback already triggered):', e)
+      await log(`[Login] on_login_success failed: ${e}`)
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : '登录失败，请重试'
-    console.error('[Login] handleCode error:', errMsg)
+    await log(`[Login] handleCode ERROR: ${errMsg}`)
     status.value = 'error'
     errorMessage.value = errMsg
   }
@@ -102,8 +118,11 @@ async function handleDeepLink(urls: string[]) {
 }
 
 onMounted(async () => {
+  await log(`[Login] onMounted, url=${window.location.href.substring(0, 120)}`)
+
   // 检测 OAuth 回调 code
   const code = new URLSearchParams(window.location.search).get('code')
+  await log(`[Login] search=${window.location.search}, code=${code ? code.substring(0, 15) : 'null'}`)
   if (code) {
     await handleCode(code)
     return
