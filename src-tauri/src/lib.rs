@@ -1155,7 +1155,18 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .center()
         .visible(true)
         .on_navigation(move |url| {
-            log_msg(&format!("[login-nav] {}", &url.to_string()[..url.to_string().len().min(200)]));
+            let url_str = url.to_string();
+            log_msg(&format!("[login-nav] {}", &url_str[..url_str.len().min(200)]));
+
+            // 前端通过 URL 报告的错误（invoke 不可用时的兜底诊断）
+            if url.path().contains("aidi-login-error") {
+                let msg = url.query_pairs()
+                    .find(|(k, _)| k == "msg")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_default();
+                log_msg(&format!("[login-error] handleCode 报错: {}", msg));
+                return false; // 阻止导航到不存在的页面
+            }
 
             // 监听登录成功：解析 hash 中的 invoke=login-success&token=xxx&user=yyy
             if let Some(fragment) = url.fragment() {
@@ -1259,6 +1270,9 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         Ok(_) => log_msg(&format!("[create_login_window] 导航成功: {}", login_url_str)),
         Err(e) => log_msg(&format!("[create_login_window] 导航失败: {:?}", e)),
     }
+
+    // 打开 DevTools 方便排查问题（排查完毕后删除此行）
+    login_window.open_devtools();
 
     // 设置窗口关闭拦截：隐藏而不是销毁
     let login_window_clone = login_window.clone();

@@ -77,8 +77,11 @@ async function handleCode(code: string) {
       await log(`[Login] on_login_success failed: ${e}`)
     }
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : '登录失败，请重试'
+    const errMsg = err instanceof Error ? err.message : String(err)
     await log(`[Login] handleCode ERROR: ${errMsg}`)
+    // 通过 URL 导航报告错误（兜底，不依赖 IPC）
+    const errorUrl = `${window.location.origin}/aidi-login-error?msg=${encodeURIComponent(errMsg.substring(0, 300))}`
+    window.location.href = errorUrl
     status.value = 'error'
     errorMessage.value = errMsg
   }
