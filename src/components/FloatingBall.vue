@@ -57,7 +57,7 @@ function handleContextMenu(e: MouseEvent) {
 }
 
 // 鼠标按下 - 开始拖拽
-async function handleMouseDown(e: MouseEvent) {
+function handleMouseDown(e: MouseEvent) {
   // 右键显示菜单（仅生产模式）
   if (e.button === 2) {
     if (!isDev) {
@@ -93,13 +93,11 @@ async function handleMouseDown(e: MouseEvent) {
   lastMouseX = e.screenX
   lastMouseY = e.screenY
 
-  // 通知后端准备拖拽（只更新状态，不移动窗口）
-  await invoke('prepare_drag')
-  // 初始化后端拖拽位置（使用增量更新模式）
-  await invoke('start_drag')
+  // fire-and-forget：不 await，避免 IPC 延迟阻断 mousemove/mouseup 监听挂载
+  // 后端 prepare_drag 会在取消动画后立即记录当前物理位置（已包含 start_drag 的功能）
+  invoke('prepare_drag')
 
-  // 使用自定义拖拽逻辑，而不是 Tauri 的 startDragging()
-  // 这样可以避免吸附状态下的"弹跳"问题
+  // 立即挂载事件监听，不等待 IPC 返回，确保双击检测不被阻断
   document.addEventListener('mousemove', handleMouseMove)
   document.addEventListener('mouseup', handleMouseUp)
 }

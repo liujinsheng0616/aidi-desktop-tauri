@@ -293,8 +293,11 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
 
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
+            // 将逻辑像素转换为物理像素，修复 DPI 缩放下圆形遮罩不完整的问题
+            let scale = window.scale_factor().unwrap_or(1.0);
+            let phys_size = (size as f64 * scale) as i32;
             unsafe {
-                let hrgn = CreateEllipticRgn(0, 0, size as i32, size as i32);
+                let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
             }
         }
@@ -457,7 +460,7 @@ fn open_panel(app: tauri::AppHandle) {
 /// 拖拽开始前准备：只更新状态，不移动窗口
 /// 使用自定义拖拽逻辑时，不需要移动窗口到 pop_out 位置
 #[tauri::command]
-fn prepare_drag(_app: tauri::AppHandle) {
+fn prepare_drag(app: tauri::AppHandle) {
     // 取消所有定时器
     next_state_version();
     {
@@ -471,6 +474,15 @@ fn prepare_drag(_app: tauri::AppHandle) {
     {
         let mut timer = MENU_HIDE_TIMER.lock().unwrap();
         let _ = timer.take();
+    }
+
+    // 立即记录当前物理位置到 DRAG_WINDOW_X/Y，避免 start_drag 的竞态问题
+    // （动画线程可能正在修改位置，这里在取消动画后立即抢占）
+    if let Some(w) = app.webview_windows().get("main") {
+        if let Ok(pos) = w.outer_position() {
+            DRAG_WINDOW_X.store(pos.x, Ordering::SeqCst);
+            DRAG_WINDOW_Y.store(pos.y, Ordering::SeqCst);
+        }
     }
 
     // 更新状态，但不重置 is_docked（让 drag_end 处理）
@@ -1586,12 +1598,10 @@ fn show_menu(app: tauri::AppHandle) {
         }
     };
 
-    // 确认窗口尺寸后再显示
+    // 两条路径均直接显示窗口（前端不调用 menu_ready，不能依赖它）
     if let Ok(size) = menu_window.outer_size() {
         eprintln!("show_menu: 显示窗口前, 窗口尺寸={}x{}", size.width, size.height);
     }
-
-    // 显示窗口
     let _ = menu_window.show();
 }
 
@@ -1626,6 +1636,17 @@ fn hide_menu(app: tauri::AppHandle) {
         }));
         let _ = menu_window.hide();
     }
+}
+
+/// show_submenu / hide_submenu：前端 Menu.vue 调用的别名命令
+#[tauri::command]
+fn show_submenu(app: tauri::AppHandle) {
+    menu_expand(app);
+}
+
+#[tauri::command]
+fn hide_submenu(app: tauri::AppHandle) {
+    menu_collapse(app);
 }
 
 #[tauri::command]
@@ -2224,8 +2245,66 @@ pub fn run() {
                         .on_tray_icon_event(|_tray, event| {
                             log_msg(&format!("[Tray] 托盘事件: {:?}", event));
                         })
-                        .on_menu_event(|_tray, event| {
+                        .on_menu_event(|tray, event| {
+                            // Tauri v2 中 TrayIconBuilder::on_menu_event 会拦截托盘菜单事件，
+                            // 全局 app.on_menu_event 收不到，因此在这里处理所有托盘菜单事件
                             log_msg(&format!("[Tray] 菜单事件: {:?}", event.id));
+                            let app = tray.app_handle().clone();
+                            match event.id.as_ref() {
+                                "quit" => {
+                                    log_msg("托盘菜单: 退出");
+                                    app.exit(0);
+                                }
+                                "login" => {
+                                    log_msg("托盘菜单: 登录");
+                                    if let Some(w) = app.webview_windows().get("login") {
+                                        let _ = w.center();
+                                        let _ = w.show();
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            use tauri::{LogicalSize, Size};
+                                            let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                                            let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                                        }
+                                        let _ = w.set_focus();
+                                    } else {
+                                        match create_login_window(&app) {
+                                            Ok(w) => {
+                                                let _ = w.center();
+                                                #[cfg(target_os = "windows")]
+                                                {
+                                                    use tauri::{LogicalSize, Size};
+                                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
+                                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
+                                                }
+                                                let _ = w.show();
+                                                let _ = w.set_focus();
+                                            }
+                                            Err(e) => {
+                                                log_msg(&format!("托盘登录: 创建窗口失败: {:?}", e));
+                                            }
+                                        }
+                                    }
+                                }
+                                "toggle" => {
+                                    log_msg("托盘菜单: 切换浮动球");
+                                    if let Some(w) = app.get_webview_window("main") {
+                                        let visible = w.is_visible().unwrap_or(false);
+                                        if visible {
+                                            let _ = w.hide();
+                                        } else {
+                                            let _ = w.show();
+                                            let _ = w.set_focus();
+                                        }
+                                        sync_toggle_menu_item(&app, !visible);
+                                    }
+                                }
+                                "aigc" => {
+                                    log_msg("托盘菜单: 打开AIDI");
+                                    let _ = app.emit_to("main", "open-aigc", ());
+                                }
+                                _ => {}
+                            }
                         })
                         .build(app)?;
 
@@ -2469,6 +2548,8 @@ pub fn run() {
             menu_leave,
             menu_expand,
             menu_collapse,
+            show_submenu,
+            hide_submenu,
             update_settings,
             set_auth_token,
             set_report_user_info,
