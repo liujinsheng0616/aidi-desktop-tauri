@@ -13,52 +13,27 @@ const iframeRef = ref<HTMLIFrameElement | null>(null)
 const appId = import.meta.env.VITE_FS_APPID as string
 const redirectUriRaw = import.meta.env.VITE_FS_REDIRECT_URI as string
 const redirectUri = encodeURIComponent(redirectUriRaw)
-// gotoUrl 保留原始值，postMessage 回调时需要拼接 tmp_code 再跳转
 const gotoUrl = `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=FS`
-
 const qrIframeSrc = `https://passport.feishu.cn/suite/passport/sso/qr?goto=${encodeURIComponent(gotoUrl)}`
-
-// 写日志到桌面文件
-async function logDebug(message: string) {
-  console.log(message)
-  try {
-    await invoke('log_debug', { message })
-  } catch {
-    // 忽略错误
-  }
-}
 
 let deepLinkUnsubscribe: (() => void) | null = null
 
-async function retryLogin() {
-  await logDebug('[Login] 点击重新登录，跳转到 /login.html')
+function retryLogin() {
   window.location.href = '/login.html'
 }
 
 async function handleCode(code: string) {
-  await logDebug(`[Login] handleCode 开始处理, code=${code.substring(0, 15)}...`)
+  console.log('[Login] handleCode, code=', code.substring(0, 15))
   status.value = 'processing'
   try {
-    await logDebug('[Login] 正在调用 fetchUserIdByCode...')
     const userId = await fetchUserIdByCode(code)
-    await logDebug(`[Login] fetchUserIdByCode 返回 userId=${userId}`)
-
-    await logDebug('[Login] 正在调用 fetchTokenByUserId...')
     const token = await fetchTokenByUserId(userId)
-    await logDebug(`[Login] fetchTokenByUserId 返回 token=${token.substring(0, 10)}...`)
-
     setToken(token)
-
-    await logDebug('[Login] 正在调用 fetchCurrentUser...')
     const user = await fetchCurrentUser(token)
-    await logDebug(`[Login] fetchCurrentUser 返回 user=${JSON.stringify(user)}`)
-
     setUser(user)
     status.value = 'success'
 
-    await logDebug('[Login] 登录成功，正在保存登录信息到文件...')
-    // 调用 Rust 命令保存登录信息到 auth.json（供主窗口读取）
-    // Windows/WebView2 外部页面 invoke 可能失败，用 try/catch 包裹
+    // 保存登录信息（Windows invoke 可能失败，try/catch 包裹）
     try {
       await invoke('save_login_info', {
         token,
@@ -66,173 +41,94 @@ async function handleCode(code: string) {
         userName: user.name,
         userJson: JSON.stringify(user)
       })
-      await logDebug('[Login] 登录信息已保存到文件')
     } catch (e) {
-      await logDebug(`[Login] save_login_info invoke 失败（Windows 兜底）: ${e}`)
+      console.warn('[Login] save_login_info invoke failed:', e)
     }
 
-    // 通过 URL 导航触发 Rust on_navigation 回调（兼容 Windows/WebView2）
-    // Windows 上 invoke 在外部域名页面可能被拦截，此方式可靠触发 Rust 端登录成功处理
+    // 通过 URL 导航触发 Rust on_navigation 兜底（兼容 Windows/WebView2）
+    // Windows 外部域名页面 invoke 可能被阻断，URL 导航方式可靠
     const encodedToken = encodeURIComponent(token)
     const encodedUser = encodeURIComponent(JSON.stringify(user))
-    await logDebug('[Login] 通过 URL 导航触发 Rust on_navigation 兜底...')
+    console.log('[Login] navigating to trigger on_navigation...')
     window.location.href = `about:blank#invoke=login-success&token=${encodedToken}&user=${encodedUser}`
 
-    await logDebug('[Login] 等待 800ms 后调用 on_login_success')
+    // macOS 正常走 invoke 兜底（幂等安全）
     await new Promise(r => setTimeout(r, 800))
-
-    // macOS/正常环境直接走 invoke（与 URL 导航双保险，幂等安全）
     try {
       await invoke('on_login_success')
-      await logDebug('[Login] on_login_success 调用完成')
     } catch (e) {
-      await logDebug(`[Login] on_login_success invoke 失败（已通过 URL 兜底）: ${e}`)
+      console.warn('[Login] on_login_success invoke failed (URL fallback already triggered):', e)
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : '登录失败，请重试'
-    await logDebug(`[Login] handleCode 错误: ${errMsg}`)
+    console.error('[Login] handleCode error:', errMsg)
     status.value = 'error'
     errorMessage.value = errMsg
   }
 }
 
-// 飞书 sso/qr 页面扫码授权后，通过 postMessage 把 tmp_code（纯字符串）发给父页面
-// 父页面需模拟 Feishu QRLogin SDK 行为：拼接 tmp_code 跳转到 OAuth 授权端点
-// 授权端点再重定向回 redirect_uri?code=xxx，onMounted 读取 code 完成登录
 async function onMessage(e: MessageEvent) {
-  await logDebug(`[Login] onMessage 触发, origin=${e.origin}, dataType=${typeof e.data}`)
-
   const feishuOrigins = ['feishu.cn', 'larksuite.com', 'larkoffice.com']
-  if (!feishuOrigins.some(o => e.origin.endsWith(o))) {
-    await logDebug(`[Login] onMessage 忽略非飞书来源: ${e.origin}`)
-    return
-  }
-  if (typeof e.data !== 'string' || !e.data) {
-    await logDebug(`[Login] onMessage 忽略非字符串数据`)
-    return
-  }
+  if (!feishuOrigins.some(o => e.origin.endsWith(o))) return
+  if (typeof e.data !== 'string' || !e.data) return
 
-  await logDebug(`[Login] 收到飞书 postMessage, data=${e.data.substring(0, 50)}...`)
-
-  // e.data 就是 tmp_code，跳转让 Feishu 换取真正的 code
   const redirectUrl = `${gotoUrl}&tmp_code=${encodeURIComponent(e.data)}`
-  await logDebug(`[Login] 准备跳转到飞书授权页面: ${redirectUrl}`)
-
   try {
     window.location.href = redirectUrl
-    await logDebug(`[Login] 跳转命令已执行`)
   } catch (err) {
-    await logDebug(`[Login] 跳转失败: ${err}`)
     status.value = 'error'
     errorMessage.value = `跳转失败: ${err instanceof Error ? err.message : String(err)}`
   }
 }
 
-// 兜底：iframe 同源跳转时（redirect_uri 落在 localhost）直接从 iframe URL 提取 code
 async function onIframeLoad() {
-  await logDebug(`[Login] onIframeLoad 触发`)
   try {
     const search = iframeRef.value?.contentWindow?.location.search ?? ''
-    await logDebug(`[Login] iframe search: ${search}`)
     const code = new URLSearchParams(search).get('code')
-    if (code) {
-      await logDebug(`[Login] 从 iframe 提取到 code: ${code.substring(0, 10)}...`)
-      await handleCode(code)
-    }
-  } catch (e) {
-    // 跨域帧抛出 SecurityError，忽略
-    await logDebug(`[Login] onIframeLoad 跨域错误 (预期行为)`)
+    if (code) await handleCode(code)
+  } catch {
+    // 跨域帧 SecurityError，忽略
   }
 }
 
-// 处理 deep link 回调（生产环境）
-// 飞书重定向到 aidi://auth?code=xxx
 async function handleDeepLink(urls: string[]) {
-  await logDebug(`[Login] handleDeepLink 收到 URLs: ${JSON.stringify(urls)}`)
   for (const url of urls) {
     try {
-      const urlObj = new URL(url)
-      const code = urlObj.searchParams.get('code')
-      if (code) {
-        await logDebug(`[Login] DeepLink 提取到 code: ${code.substring(0, 10)}...`)
-        await handleCode(code)
-        return
-      }
-    } catch (e) {
-      await logDebug(`[Login] DeepLink URL 解析失败: ${url}, error=${e}`)
-    }
+      const code = new URL(url).searchParams.get('code')
+      if (code) { await handleCode(code); return }
+    } catch {}
   }
 }
 
 onMounted(async () => {
-  // 全局错误捕获
-  const handleError = async (event: ErrorEvent) => {
-    await logDebug(`[Login] 全局错误: ${event.message}, filename=${event.filename}, lineno=${event.lineno}`)
-  }
-  const handleRejection = async (event: PromiseRejectionEvent) => {
-    await logDebug(`[Login] Promise 拒绝: ${event.reason}`)
-  }
-  window.addEventListener('error', handleError)
-  window.addEventListener('unhandledrejection', handleRejection)
-
-  // 输出调试日志到桌面文件
-  await logDebug('========== LoginPage onMounted ==========')
-  await logDebug('[Login] 环境变量:')
-  await logDebug(`  VITE_FS_APPID: ${appId}`)
-  await logDebug(`  VITE_FS_REDIRECT_URI: ${redirectUriRaw}`)
-  await logDebug(`  gotoUrl: ${gotoUrl}`)
-  await logDebug(`  qrIframeSrc: ${qrIframeSrc}`)
-  await logDebug(`  当前 URL: ${window.location.href}`)
-  await logDebug(`  当前 origin: ${window.location.origin}`)
-  await logDebug(`  当前 pathname: ${window.location.pathname}`)
-  await logDebug(`  当前 search: ${window.location.search}`)
-
-  // 开发环境：OAuth 回调页面以 ?code=xxx 重新加载
+  // 检测 OAuth 回调 code
   const code = new URLSearchParams(window.location.search).get('code')
   if (code) {
-    await logDebug(`[Login] 检测到 URL 中的 code 参数: ${code.substring(0, 15)}...`)
     await handleCode(code)
     return
   }
 
-  await logDebug(`[Login] 未检测到 code 参数，进入扫码模式...`)
-
-  // 注册 deep link 监听器（前端插件方式）
+  // 注册 deep link 监听
   try {
     deepLinkUnsubscribe = await onOpenUrl(handleDeepLink)
-    await logDebug('[Login] DeepLink 插件监听器已注册')
-  } catch (e) {
-    await logDebug(`[Login] DeepLink 插件注册失败: ${e}`)
-  }
+  } catch {}
 
-  // 监听 Rust 端转发的 deep link 事件（备用方式）
+  // 监听 Rust 转发的 deep link 事件（备用）
   try {
     const { listen } = await import('@tauri-apps/api/event')
-    const unlisten = await listen<string[]>('deep-link-received', async (event) => {
-      await logDebug(`[Login] 收到 Rust 转发的 deep-link-received 事件: ${JSON.stringify(event.payload)}`)
-      await handleDeepLink(event.payload)
+    const unlisten = await listen<string[]>('deep-link-received', (event) => {
+      handleDeepLink(event.payload)
     })
-    await logDebug('[Login] Rust deep link 事件监听器已注册')
-    // 保存取消监听函数
-    const originalUnsubscribe = deepLinkUnsubscribe
-    deepLinkUnsubscribe = async () => {
-      if (originalUnsubscribe) originalUnsubscribe()
-      unlisten()
-    }
-  } catch (e) {
-    await logDebug(`[Login] Rust deep link 事件监听失败: ${e}`)
-  }
+    const prev = deepLinkUnsubscribe
+    deepLinkUnsubscribe = async () => { if (prev) prev(); unlisten() }
+  } catch {}
 
-  // 监听 iframe postMessage
   window.addEventListener('message', onMessage)
-  await logDebug('[Login] postMessage 监听器已注册')
 })
 
 onUnmounted(() => {
   window.removeEventListener('message', onMessage)
-  if (deepLinkUnsubscribe) {
-    deepLinkUnsubscribe()
-  }
+  if (deepLinkUnsubscribe) deepLinkUnsubscribe()
 })
 </script>
 

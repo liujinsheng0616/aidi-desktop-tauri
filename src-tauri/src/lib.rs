@@ -1155,10 +1155,12 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .center()
         .visible(true)
         .on_navigation(move |url| {
+            log_msg(&format!("[login-nav] {}", &url.to_string()[..url.to_string().len().min(200)]));
+
             // 监听登录成功：解析 hash 中的 invoke=login-success&token=xxx&user=yyy
             if let Some(fragment) = url.fragment() {
                 if let Some(rest) = fragment.strip_prefix("invoke=login-success") {
-                    log_msg(&format!("[login] 捕获到登录成功: {}", rest));
+                    log_msg(&format!("[login] 捕获到登录成功, rest前50字符: {}", &rest[..rest.len().min(50)]));
 
                     // 解析参数
                     let mut token = String::new();
@@ -1224,6 +1226,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
                             // 执行登录成功逻辑（显示主窗口、更新托盘等）
                             handle_login_success(&app2);
                         });
+                        return false; // 阻止跳转到 about:blank，保持登录页可见直到窗口被隐藏
                     }
                 }
             }
@@ -1307,15 +1310,17 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
 
 /// 登录成功后的处理逻辑（从 on_login_success 抽取出来供 on_navigation 调用）
 fn handle_login_success(app: &tauri::AppHandle) {
-    log_msg("handle_login_success: 登录成功");
+    log_msg("handle_login_success: 开始处理登录成功");
 
     // 更新登录状态
     IS_LOGGED_IN.store(true, Ordering::SeqCst);
 
-    // 关闭登录窗口
+    // 隐藏登录窗口
     if let Some(w) = app.webview_windows().get("login") {
         let _ = w.hide();
-        log_msg("登录窗口已隐藏");
+        log_msg("handle_login_success: 登录窗口已隐藏");
+    } else {
+        log_msg("handle_login_success: 登录窗口不存在（已关闭？）");
     }
 
     // 更新托盘菜单为已登录状态
@@ -1323,44 +1328,63 @@ fn handle_login_success(app: &tauri::AppHandle) {
 
     // 获取 main 窗口并显示
     if let Some(main_window) = app.webview_windows().get("main") {
-        // 先显示窗口（确保 WebView 已初始化）
-        let _ = main_window.show();
-        log_msg("主窗口已显示");
+        log_msg("handle_login_success: 找到 main 窗口，准备显示...");
 
         // 从 auth.json 读取登录信息并写入主窗口的 localStorage
-        if let Some(data_dir) = dirs::data_local_dir() {
+        let js_inject = if let Some(data_dir) = dirs::data_local_dir() {
             let auth_file = data_dir.join("AIDI Desktop").join("auth.json");
+            log_msg(&format!("handle_login_success: 读取 auth.json: {:?}", auth_file));
             if let Ok(content) = std::fs::read_to_string(&auth_file) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                     let token = json["token"].as_str().unwrap_or("");
                     let user_json = json["user"].as_str().unwrap_or("{}");
-
-                    let js_code = format!(
+                    log_msg(&format!("handle_login_success: auth.json 读取成功, token前10字符={}", &token[..token.len().min(10)]));
+                    format!(
                         r#"(function() {{
-                            var token = {};
-                            var user = {};
                             try {{
-                                localStorage.setItem('aidi-token', token);
-                                localStorage.setItem('aidi-user', user);
+                                localStorage.setItem('aidi-token', {});
+                                localStorage.setItem('aidi-user', {});
                             }} catch(e) {{}}
+                            window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete();
                         }})();"#,
                         serde_json::to_string(&serde_json::json!(token)).unwrap_or_else(|_| "\"\"".to_string()),
                         user_json
-                    );
-
-                    let _ = main_window.eval(&js_code);
-                    log_msg("已将登录信息写入 localStorage");
+                    )
+                } else {
+                    log_msg("handle_login_success: auth.json JSON 解析失败");
+                    String::new()
                 }
+            } else {
+                log_msg("handle_login_success: auth.json 读取失败（文件不存在或权限问题）");
+                String::new()
             }
-        }
+        } else {
+            log_msg("handle_login_success: 无法获取 data_local_dir");
+            String::new()
+        };
 
-        // 调用前端的初始化函数
-        let eval_result = main_window.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
-        log_msg(&format!("调用前端初始化函数: {:?}", eval_result));
+        // 通过 Tauri 运行时显示窗口，确保在正确线程执行
+        let app_clone = app.clone();
+        let main_window_clone = main_window.clone();
+        tauri::async_runtime::spawn(async move {
+            let show_result = main_window_clone.show();
+            log_msg(&format!("handle_login_success: main_window.show() 结果: {:?}", show_result));
+            let visible = main_window_clone.is_visible().unwrap_or(false);
+            log_msg(&format!("handle_login_success: main 窗口显示后可见性: {}", visible));
 
-        // 更新托盘菜单（浮动球现在可见了）
-        let visible = main_window.is_visible().unwrap_or(false);
-        rebuild_tray_menu(app, true, visible);
+            if !js_inject.is_empty() {
+                let eval_result = main_window_clone.eval(&js_inject);
+                log_msg(&format!("handle_login_success: eval 注入结果: {:?}", eval_result));
+            } else {
+                // auth.json 读取失败时直接调用前端初始化函数
+                let _ = main_window_clone.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
+            }
+
+            rebuild_tray_menu(&app_clone, true, visible);
+            log_msg("handle_login_success: 全部完成");
+        });
+    } else {
+        log_msg("handle_login_success: 错误！main 窗口不存在，无法显示悬浮球");
     }
 }
 
