@@ -1154,6 +1154,28 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .resizable(false)
         .center()
         .visible(true)
+        // 拦截远程登录页的 hash-only 变更（window.location.hash = '#invoke=login-success...'）
+        // hash-only 变更不触发 WebView2 的 NavigationStarting，无法被 on_navigation 捕获
+        // 此脚本将其转换为完整 URL 跳转，从而触发 on_navigation
+        .initialization_script(r#"
+            (function() {
+                function tryRedirect() {
+                    var h = window.location.hash;
+                    if (h && h.indexOf('invoke=login-success') !== -1) {
+                        var fullUrl = window.location.origin + '/aidi-login-success' + (h.startsWith('#') ? h : '#' + h);
+                        window.location.href = fullUrl;
+                    }
+                }
+                window.addEventListener('hashchange', tryRedirect);
+                // 兜底轮询：防止某些实现直接修改 hash 而不触发 hashchange 事件
+                var _t = setInterval(function() {
+                    if (window.location.hash.indexOf('invoke=login-success') !== -1) {
+                        clearInterval(_t);
+                        tryRedirect();
+                    }
+                }, 300);
+            })();
+        "#)
         .on_navigation(move |url| {
             let url_str = url.to_string();
             log_msg(&format!("[login-nav] {}", &url_str[..url_str.len().min(200)]));
