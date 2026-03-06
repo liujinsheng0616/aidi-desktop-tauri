@@ -1011,10 +1011,12 @@ fn get_window_position(window: tauri::Window) -> (i32, i32) {
 fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::WebviewWindow, tauri::Error> {
     let app_handle = app.clone();
     let menu_url_str = build_menu_url(app, direction);
-    let menu_url = tauri::WebviewUrl::External(
-        tauri::Url::parse(&menu_url_str).unwrap()
-    );
-    tauri::WebviewWindowBuilder::new(app, "menu", menu_url)
+    log_msg(&format!("[create_menu_window] 开始创建, direction={}, url={}", direction, menu_url_str));
+
+    // 先用 about:blank 创建窗口，避免 build() 阻塞 UI 线程（与登录窗口保持一致的模式）
+    let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
+    log_msg("[create_menu_window] 使用 about:blank 构建窗口...");
+    let menu_window = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
         .inner_size(192.0, 124.0)
         .decorations(false)
@@ -1183,7 +1185,15 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     handleHash();
 })();
 "#)
-        .build()
+        .build()?;
+
+    // build() 返回后再异步 navigate 到远程 URL，避免阻塞 UI 线程
+    log_msg(&format!("[create_menu_window] 窗口构建成功，开始 navigate 到 {}", menu_url_str));
+    let menu_url = tauri::Url::parse(&menu_url_str).unwrap();
+    let _ = menu_window.navigate(menu_url);
+    log_msg("[create_menu_window] navigate 已调用，返回窗口句柄");
+
+    Ok(menu_window)
 }
 
 // 登录窗口创建状态标志
