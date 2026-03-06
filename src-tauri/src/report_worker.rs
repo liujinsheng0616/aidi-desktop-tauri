@@ -286,7 +286,10 @@ fn run_system_info_script() -> Result<serde_json::Value, String> {
 /// 执行系统信息采集脚本 (Windows)
 #[cfg(target_os = "windows")]
 fn run_system_info_script() -> Result<serde_json::Value, String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
     let mut path = exe_path.clone();
@@ -296,6 +299,7 @@ fn run_system_info_script() -> Result<serde_json::Value, String> {
 
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("执行系统信息脚本失败: {}", e))?;
 
