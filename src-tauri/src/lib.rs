@@ -1017,11 +1017,18 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     // 先用 about:blank 创建窗口，避免 build() 阻塞 UI 线程（与登录窗口保持一致的模式）
     let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
     log_msg("[create_menu_window] 使用 about:blank 构建窗口...");
+    // Windows 上透明窗口（transparent:true + decorations:false）在动态创建时 WebView2 初始化可能挂起
+    // 因此 Windows 上禁用透明，改用实色背景
+    #[cfg(target_os = "windows")]
+    let menu_transparent = false;
+    #[cfg(not(target_os = "windows"))]
+    let menu_transparent = true;
+
     let menu_window = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
         .inner_size(192.0, 124.0)
         .decorations(false)
-        .transparent(true)
+        .transparent(menu_transparent)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
@@ -1155,6 +1162,14 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         // 通过 initialization_script 监听 hashchange 事件，直接 invoke Tauri 命令作为补充方案。
         // 与现有 on_navigation 回调共存不冲突：macOS 走 on_navigation，Windows 走此脚本。
         .initialization_script(r#"
+(function() {
+    // Windows 上 transparent 被禁用，注入实色背景避免白屏闪烁
+    if (navigator.userAgent.indexOf('Windows') !== -1) {
+        var _s = document.createElement('style');
+        _s.textContent = 'html,body{background:#1a1a2e!important}';
+        document.head.appendChild(_s);
+    }
+})();
 (function() {
     var _ALLOWED = ['hide_menu','show_optimizer_window','hide_optimizer_window',
         'show_main_window','hide_main_window','show_login_window','hide_login_window',
