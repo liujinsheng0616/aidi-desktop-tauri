@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import FloatingBall from './components/FloatingBall.vue'
@@ -10,6 +10,9 @@ const ballSize = ref(60)
 const opacity = ref(100)
 const colorTheme = ref('cyan-purple')
 const initialized = ref(false)
+
+let isCreatingAigcWindow = false
+let unlistenOpenAigc: (() => void) | null = null
 
 function loadSettings() {
   const saved = localStorage.getItem('aidi-settings')
@@ -91,7 +94,8 @@ onMounted(async () => {
   })
 
   // 监听托盘"打开AIDI"事件
-  listen('open-aigc', async () => {
+  unlistenOpenAigc = await listen('open-aigc', async () => {
+    if (isCreatingAigcWindow) return
     const fsUserId = getUser()?.fsUserId ?? ''
     const appDomain = import.meta.env.VITE_APP_DOMAIN || 'https://aidi.yadea.com.cn'
     const aigcUrl = `${appDomain}/aigc/#/login?userId=${fsUserId}`
@@ -102,6 +106,7 @@ onMounted(async () => {
       await existing.show()
       await existing.setFocus()
     } else {
+      isCreatingAigcWindow = true
       const webview = new WebviewWindow('aigc-window', {
         url: aigcUrl,
         title: 'AIGC',
@@ -112,7 +117,11 @@ onMounted(async () => {
         resizable: true,
         alwaysOnTop: false,
       })
-      webview.once('tauri://error', (e) => console.error('Error creating aigc window:', e))
+      webview.once('tauri://created', () => { isCreatingAigcWindow = false })
+      webview.once('tauri://error', (e) => {
+        console.error('Error creating aigc window:', e)
+        isCreatingAigcWindow = false
+      })
     }
   })
 
@@ -125,6 +134,10 @@ onMounted(async () => {
   } else {
     await invoke('show_login_window')
   }
+})
+
+onUnmounted(() => {
+  unlistenOpenAigc?.()
 })
 </script>
 

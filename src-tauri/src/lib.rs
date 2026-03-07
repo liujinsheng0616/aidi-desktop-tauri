@@ -92,6 +92,7 @@ fn log_msg(msg: &str) {
     if let Some(log_file) = LOG_FILE.get() {
         if let Ok(mut file) = log_file.lock() {
             let _ = file.write_all(log_line.as_bytes());
+            let _ = file.flush();
         }
     }
 }
@@ -1025,7 +1026,6 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         .skip_taskbar(true)
         .resizable(false)
         .visible(false)
-        .incognito(true)
         .on_navigation(move |url| {
             // 通用命令桥：解析 hash 中的 invoke=<命令名>[&param=val...]，执行白名单内的命令
             if let Some(fragment) = url.fragment() {
@@ -1371,9 +1371,6 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         Err(e) => log_msg(&format!("[create_login_window] 导航失败: {:?}", e)),
     }
 
-    // 打开 DevTools 方便排查问题（排查完毕后删除此行）
-    login_window.open_devtools();
-
     // 设置窗口关闭拦截：隐藏而不是销毁
     let login_window_clone = login_window.clone();
     let _ = login_window.on_window_event(move |event| {
@@ -1591,11 +1588,14 @@ fn show_menu(app: tauri::AppHandle) {
         state.submenu_opens_left = opens_left;
     }
 
-    // 复用或创建菜单窗口
-    let menu_window = {
-        let new_url = tauri::Url::parse(&build_menu_url(&app, submenu_direction)).unwrap();
-        let windows = app.webview_windows();
-        if let Some(existing) = windows.get("menu") {
+    // 将窗口创建/复用逻辑投递到主线程执行，避免在 spawn_blocking 线程中调用 build()
+    // 导致与主线程死锁（Windows 上 WebView2 窗口必须在主线程创建）
+    let app_for_main = app.clone();
+    let direction_owned = submenu_direction.to_string();
+    let _ = app.run_on_main_thread(move || {
+        let new_url = tauri::Url::parse(&build_menu_url(&app_for_main, &direction_owned)).unwrap();
+        let windows = app_for_main.webview_windows();
+        let menu_window = if let Some(existing) = windows.get("menu") {
             let _ = existing.hide();
             let _ = existing.set_size(Size::Logical(tauri::LogicalSize {
                 width: menu_width as f64,
@@ -1606,36 +1606,35 @@ fn show_menu(app: tauri::AppHandle) {
                 y: menu_y as f64,
             }));
             eprintln!("show_menu: 复用窗口, 设置尺寸={}x{}, 位置=({}, {}), direction={}",
-                menu_width, menu_height, menu_x, menu_y, submenu_direction);
+                menu_width, menu_height, menu_x, menu_y, direction_owned);
             let _ = existing.navigate(new_url);
-            existing.clone()
+            Some(existing.clone())
         } else {
-            match create_menu_window(&app, submenu_direction) {
+            match create_menu_window(&app_for_main, &direction_owned) {
                 Ok(w) => {
                     let _ = w.set_position(Position::Logical(LogicalPosition {
                         x: menu_x as f64,
                         y: menu_y as f64,
                     }));
-                    w
+                    Some(w)
                 },
                 Err(e) => {
                     eprintln!("show_menu: 创建菜单窗口失败: {}", e);
-                    return;
+                    None
                 }
             }
-        }
-    };
+        };
 
-    // 异步延迟显示窗口，等待外网页面加载完成（navigate 是异步的，立即 show 会显示白屏）
-    if let Ok(size) = menu_window.outer_size() {
-        eprintln!("show_menu: 等待页面加载，窗口尺寸={}x{}", size.width, size.height);
-    }
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-        if let Some(w) = app_clone.webview_windows().get("menu") {
-            let _ = w.show();
-            eprintln!("show_menu: 延迟600ms后显示菜单窗口");
+        if menu_window.is_some() {
+            // 异步延迟显示窗口，等待外网页面加载完成（navigate 是异步的，立即 show 会显示白屏）
+            let app2 = app_for_main.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                if let Some(w) = app2.webview_windows().get("menu") {
+                    let _ = w.show();
+                    eprintln!("show_menu: 延迟600ms后显示菜单窗口");
+                }
+            });
         }
     });
 }
@@ -2405,10 +2404,6 @@ pub fn run() {
                                     }
                                 }
                             }
-                        }
-                        "aigc" => {
-                            // 通知前端打开 AIGC 窗口（前端持有 fsUserId）
-                            let _ = app.emit_to("main", "open-aigc", ());
                         }
                         "quit" => {
                             app.exit(0);
