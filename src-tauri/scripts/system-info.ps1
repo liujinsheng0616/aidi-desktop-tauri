@@ -48,8 +48,8 @@ $output = @{
         os = @{
             name = $os.Caption
             version = $os.Version
-            build = $os.BuildNumber
-            architecture = $os.OSArchitecture
+            build = $os.BuildNumber.ToString()
+            architecture = if ($os.OSArchitecture -like "*64*") { "x86_64" } else { "x86" }
             installDate = $os.InstallDate.ToString("yyyy-MM-dd")
             lastBoot = $os.LastBootUpTime.ToString("yyyy-MM-dd HH:mm:ss")
         }

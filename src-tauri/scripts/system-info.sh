@@ -3,7 +3,7 @@
 # Returns JSON with system details
 
 # Get system info
-hostname=$(hostname)
+hostname=$(scutil --get ComputerName 2>/dev/null || scutil --get LocalHostName 2>/dev/null || hostname)
 model=$(sysctl -n hw.model 2>/dev/null || echo "Mac")
 
 # Get local IP address

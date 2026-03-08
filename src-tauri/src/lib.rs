@@ -1030,11 +1030,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     // 先用 about:blank 创建窗口，避免 build() 阻塞 UI 线程（与登录窗口保持一致的模式）
     let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
     log_msg("[create_menu_window] 使用 about:blank 构建窗口...");
-    // Windows 上透明窗口（transparent:true + decorations:false）在动态创建时 WebView2 初始化可能挂起
-    // 因此 Windows 上禁用透明，改用实色背景
-    #[cfg(target_os = "windows")]
-    let menu_transparent = false;
-    #[cfg(not(target_os = "windows"))]
+    // 使用 about:blank 先创建再 navigate，可绕过 Windows WebView2 transparent+直接加载远端URL 的挂起 bug
     let menu_transparent = true;
 
     let builder = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
@@ -1180,14 +1176,6 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         // 通过 initialization_script 监听 hashchange 事件，直接 invoke Tauri 命令作为补充方案。
         // 与现有 on_navigation 回调共存不冲突：macOS 走 on_navigation，Windows 走此脚本。
         .initialization_script(r#"
-(function() {
-    // Windows 上 transparent 被禁用，注入实色背景避免白屏闪烁
-    if (navigator.userAgent.indexOf('Windows') !== -1) {
-        var _s = document.createElement('style');
-        _s.textContent = 'html,body{background:#1a1a2e!important}';
-        document.head.appendChild(_s);
-    }
-})();
 (function() {
     var _ALLOWED = ['hide_menu','show_optimizer_window','hide_optimizer_window',
         'show_main_window','hide_main_window','show_login_window','hide_login_window',
@@ -1950,12 +1938,24 @@ fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
         .output()
         .map_err(|e| format!("Failed to execute script: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout_raw = output.stdout.clone();
+    let stdout_lossy = String::from_utf8_lossy(&stdout_raw).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // 诊断日志
+    eprintln!("[run_script] script={}, exit={}", script_path_str, output.status);
+    eprintln!("[run_script] stdout bytes[0..3]={:?}", stdout_raw.get(0..3));
+    eprintln!("[run_script] stdout={}", &stdout_lossy[..stdout_lossy.len().min(500)]);
+    if !stderr.is_empty() {
+        eprintln!("[run_script] stderr={}", stderr);
+    }
 
     if !output.status.success() {
         return Err(format!("Script failed: {}", stderr));
     }
+
+    // 去除 UTF-8 BOM（Windows PowerShell 可能输出带 BOM 的 UTF-8）
+    let stdout = stdout_lossy.trim_start_matches('\u{FEFF}').trim().to_string();
 
     serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
 }
@@ -1977,12 +1977,23 @@ fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Val
         .output()
         .map_err(|e| format!("Failed to execute script: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout_raw = output.stdout.clone();
+    let stdout_lossy = String::from_utf8_lossy(&stdout_raw).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    eprintln!("[run_script_with_args] script={}, args={}, exit={}", script_path_str, args, output.status);
+    eprintln!("[run_script_with_args] stdout bytes[0..3]={:?}", stdout_raw.get(0..3));
+    eprintln!("[run_script_with_args] stdout={}", &stdout_lossy[..stdout_lossy.len().min(500)]);
+    if !stderr.is_empty() {
+        eprintln!("[run_script_with_args] stderr={}", stderr);
+    }
 
     if !output.status.success() {
         return Err(format!("Script failed: {}", stderr));
     }
+
+    // 去除 UTF-8 BOM
+    let stdout = stdout_lossy.trim_start_matches('\u{FEFF}').trim().to_string();
 
     serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
 }
