@@ -1024,17 +1024,21 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     #[cfg(not(target_os = "windows"))]
     let menu_transparent = true;
 
-    let menu_window = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
+    let builder = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
         .inner_size(192.0, 124.0)
         .decorations(false)
-        .hidden_title(true)
         .transparent(menu_transparent)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(false)
-        .on_navigation(move |url| {
+        .visible(false);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.hidden_title(true);
+
+    let menu_window = builder
+        .on_navigation(move |url: tauri::Url| {
             // 通用命令桥：解析 hash 中的 invoke=<命令名>[&param=val...]，执行白名单内的命令
             if let Some(fragment) = url.fragment() {
                 if let Some(rest) = fragment.strip_prefix("invoke=") {
