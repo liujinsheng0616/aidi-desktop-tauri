@@ -22,6 +22,26 @@ function getStatusText(status: string) {
     default: return status
   }
 }
+
+function getMediaTypeText(mediaType: string) {
+  switch (mediaType) {
+    case 'SSD': return 'SSD'
+    case 'HDD': return '机械硬盘'
+    case 'SCM': return 'SCM'
+    case 'Unspecified': return '未知类型'
+    default: return mediaType || '未知类型'
+  }
+}
+
+function getHealthStatusText(healthStatus: string) {
+  switch (healthStatus) {
+    case 'Healthy': return '健康'
+    case 'Warning': return '警告'
+    case 'Unhealthy': return '不健康'
+    case 'Unknown': return '未知'
+    default: return healthStatus || '未知'
+  }
+}
 </script>
 
 <template>
@@ -58,7 +78,7 @@ function getStatusText(status: string) {
         >
           <span class="truncate max-w-[200px]" :title="disk.name">{{ disk.name }}</span>
           <span class="text-muted-foreground">
-            {{ disk.mediaType }} | {{ disk.sizeGB }} GB | {{ disk.healthStatus }}
+            {{ getMediaTypeText(disk.mediaType) }} | {{ disk.sizeGB }} GB | {{ getHealthStatusText(disk.healthStatus) }}
           </span>
         </div>
       </div>

@@ -1,14 +1,10 @@
 # Startup Toggle Script - Enable/disable a startup item
 # Input: JSON with name, location, and enabled status
 
-param(
-    [Parameter(Mandatory=$true)]
-    [string]$ItemJson
-)
-
 # Fix Chinese encoding: Force UTF-8 output
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+$ItemJson = $env:SCRIPT_ARGS
 
 $ErrorActionPreference = "Stop"
 

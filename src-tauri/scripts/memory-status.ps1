@@ -39,7 +39,7 @@ if ($availablePercent -gt 30) {
 $output = @{
     dimension = "memory"
     status = $status
-    summary = "Memory used: $usedPercent%, Available: $availablePercent%"
+    summary = "内存已使用 $usedPercent%，可用 $availablePercent%"
     details = @{
         total = $totalMemory
         totalGB = [math]::Round($totalMemory / 1GB, 2)

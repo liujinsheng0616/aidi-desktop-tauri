@@ -79,7 +79,7 @@ if ($count -lt 15) {
 $output = @{
     dimension = "startup"
     status = $status
-    summary = "$count startup items"
+    summary = "$count 个启动项"
     details = @{
         count = $count
         items = $startupItems

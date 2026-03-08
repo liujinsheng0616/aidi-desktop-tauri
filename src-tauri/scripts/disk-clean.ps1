@@ -1,11 +1,7 @@
 # Disk Clean Script for Windows - Cleans selected categories
-param(
-    [Parameter(Position=0)]
-    [string]$CategoriesJson = '[]'
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+$CategoriesJson = if ($env:SCRIPT_ARGS) { $env:SCRIPT_ARGS } else { '[]' }
 $ErrorActionPreference = "SilentlyContinue"
 
 $results = @{

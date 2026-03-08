@@ -1937,11 +1937,26 @@ fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
     let script_path = get_script_path(script_name);
     let script_path_str = script_path.to_string_lossy().to_string();
 
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str])
+    let script_content = std::fs::read_to_string(&script_path)
+        .map_err(|e| format!("Failed to read script: {}", e))?;
+
+    let mut child = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"])
         .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("Failed to execute script: {}", e))?;
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start PowerShell: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(script_content.as_bytes());
+        // stdin drop → PowerShell 收到 EOF 开始执行
+    }
+
+    let output = child.wait_with_output()
+        .map_err(|e| format!("Failed to wait for script: {}", e))?;
 
     let stdout_raw = output.stdout.clone();
     let stdout_lossy = String::from_utf8_lossy(&stdout_raw).to_string();
@@ -1976,11 +1991,26 @@ fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Val
     let script_path = get_script_path(script_name);
     let script_path_str = script_path.to_string_lossy().to_string();
 
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str, args])
+    let script_content = std::fs::read_to_string(&script_path)
+        .map_err(|e| format!("Failed to read script: {}", e))?;
+
+    let mut child = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"])
+        .env("SCRIPT_ARGS", args)
         .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("Failed to execute script: {}", e))?;
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start PowerShell: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(script_content.as_bytes());
+    }
+
+    let output = child.wait_with_output()
+        .map_err(|e| format!("Failed to wait for script: {}", e))?;
 
     let stdout_raw = output.stdout.clone();
     let stdout_lossy = String::from_utf8_lossy(&stdout_raw).to_string();

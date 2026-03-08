@@ -1,14 +1,10 @@
 # Elevated Clean Script for Windows - Cleans categories requiring admin privileges
 # Input: JSON array of category keys
 
-param(
-    [Parameter(Position=0)]
-    [string]$CategoriesJson = '[]'
-)
-
 # Fix Chinese encoding: Force UTF-8 output
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+$CategoriesJson = if ($env:SCRIPT_ARGS) { $env:SCRIPT_ARGS } else { '[]' }
 
 $ErrorActionPreference = "SilentlyContinue"
 
