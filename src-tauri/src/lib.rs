@@ -292,6 +292,9 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
     {
         use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
         use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION,
+        };
 
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
@@ -301,6 +304,10 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
             unsafe {
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
+
+                // 移除 WS_CAPTION 样式，彻底消除 Windows 标题栏热区（Snap Layout 触发区）
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
             }
         }
     }
@@ -1113,9 +1120,9 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                             (s.menu_window_x, s.menu_window_y, s.submenu_opens_left)
                                         };
                                         if opens_left {
-                                            // 向左展开：窗口 x 左移244，宽度扩至428
+                                            // 向左展开：窗口 x 左移236，宽度扩至428
                                             let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                                                x: (init_x - 244) as f64,
+                                                x: (init_x - 236) as f64,
                                                 y: init_y as f64,
                                             }));
                                         }
@@ -1602,7 +1609,6 @@ fn show_menu(app: tauri::AppHandle) {
 
     // 菜单尺寸常量
     let menu_width: i32 = 192;
-    let submenu_width: i32 = 244;
     let menu_height: i32 = 124;
     let menu_gap: i32 = 4;
 
@@ -1615,10 +1621,9 @@ fn show_menu(app: tauri::AppHandle) {
     let ball_x = (ball_pos.x as f64 / scale_factor) as i32;
     let ball_y = (ball_pos.y as f64 / scale_factor) as i32;
 
-    // 计算水平方向：根据右侧空间决定菜单对齐方式和子菜单展开方向
-    let ball_right_edge = ball_x + visual_ball_size;
-    let space_right = screen_width - ball_right_edge;
-    let opens_left = space_right < submenu_width;
+    // 计算水平方向：根据球中心是否过屏幕中线决定菜单对齐方式和子菜单展开方向
+    let ball_center_x = ball_x + visual_ball_size / 2;
+    let opens_left = ball_center_x > screen_width / 2;
 
     let (menu_x, submenu_direction) = if opens_left {
         // 右侧空间不足（球在右侧），子菜单向左展开，主菜单右对齐球体
@@ -1637,8 +1642,8 @@ fn show_menu(app: tauri::AppHandle) {
         ball_y + visual_ball_size + menu_gap
     };
 
-    eprintln!("show_menu: screen=({}, {}), ball=({}, {}, size={}), space_right={}, opens_left={}, menu=({}, {})",
-        screen_width, screen_height, ball_x, ball_y, visual_ball_size, space_right, opens_left, menu_x, menu_y);
+    eprintln!("show_menu: screen=({}, {}), ball=({}, {}, size={}), ball_center_x={}, opens_left={}, menu=({}, {})",
+        screen_width, screen_height, ball_x, ball_y, visual_ball_size, ball_center_x, opens_left, menu_x, menu_y);
 
     // 存入 DOCK_STATE
     {
