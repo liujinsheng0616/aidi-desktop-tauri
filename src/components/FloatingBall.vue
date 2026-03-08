@@ -173,9 +173,6 @@ function handleMouseLeave() {
   // 如果正在拖拽，不隐藏菜单和吸附球
   if (isDragging) return
 
-  // 立即隐藏菜单
-  invoke('hide_menu_window')
-
   // 延迟隐藏吸附球
   hideDockTimeout = window.setTimeout(() => {
     if (hoverVersion === currentVersion) {
