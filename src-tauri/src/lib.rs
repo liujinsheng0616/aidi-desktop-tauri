@@ -1028,6 +1028,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         .title("Menu")
         .inner_size(192.0, 124.0)
         .decorations(false)
+        .hidden_title(true)
         .transparent(menu_transparent)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -1603,55 +1604,73 @@ fn show_menu(app: tauri::AppHandle) {
         state.submenu_opens_left = opens_left;
     }
 
-    // 将窗口创建/复用逻辑投递到主线程执行，避免在 spawn_blocking 线程中调用 build()
-    // 导致与主线程死锁（Windows 上 WebView2 窗口必须在主线程创建）
-    let app_for_main = app.clone();
-    let direction_owned = submenu_direction.to_string();
-    let _ = app.run_on_main_thread(move || {
-        let new_url = tauri::Url::parse(&build_menu_url(&app_for_main, &direction_owned)).unwrap();
-        let windows = app_for_main.webview_windows();
-        let menu_window = if let Some(existing) = windows.get("menu") {
-            let _ = existing.hide();
-            let _ = existing.set_size(Size::Logical(tauri::LogicalSize {
-                width: menu_width as f64,
-                height: menu_height as f64,
-            }));
-            let _ = existing.set_position(Position::Logical(LogicalPosition {
-                x: menu_x as f64,
-                y: menu_y as f64,
-            }));
-            eprintln!("show_menu: 复用窗口, 设置尺寸={}x{}, 位置=({}, {}), direction={}",
-                menu_width, menu_height, menu_x, menu_y, direction_owned);
-            let _ = existing.navigate(new_url);
-            Some(existing.clone())
-        } else {
-            match create_menu_window(&app_for_main, &direction_owned) {
-                Ok(w) => {
-                    let _ = w.set_position(Position::Logical(LogicalPosition {
-                        x: menu_x as f64,
-                        y: menu_y as f64,
-                    }));
-                    Some(w)
-                },
-                Err(e) => {
-                    eprintln!("show_menu: 创建菜单窗口失败: {}", e);
-                    None
-                }
-            }
-        };
+    // 判断窗口是否已存在（在当前线程做，避免进入 run_on_main_thread 再判断）
+    let menu_exists = app.webview_windows().contains_key("menu");
 
-        if menu_window.is_some() {
-            // 异步延迟显示窗口，等待外网页面加载完成（navigate 是异步的，立即 show 会显示白屏）
-            let app2 = app_for_main.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                if let Some(w) = app2.webview_windows().get("menu") {
+    if menu_exists {
+        // 复用路径：仍用 run_on_main_thread（只做 navigate/set_size，不涉及 WebView2 初始化，无死锁风险）
+        let app_for_main = app.clone();
+        let direction_owned = submenu_direction.to_string();
+        let _ = app.run_on_main_thread(move || {
+            let new_url = tauri::Url::parse(&build_menu_url(&app_for_main, &direction_owned)).unwrap();
+            if let Some(existing) = app_for_main.webview_windows().get("menu") {
+                let _ = existing.hide();
+                let _ = existing.set_size(Size::Logical(tauri::LogicalSize {
+                    width: menu_width as f64,
+                    height: menu_height as f64,
+                }));
+                let _ = existing.set_position(Position::Logical(LogicalPosition {
+                    x: menu_x as f64,
+                    y: menu_y as f64,
+                }));
+                eprintln!("show_menu: 复用窗口, 设置尺寸={}x{}, 位置=({}, {}), direction={}",
+                    menu_width, menu_height, menu_x, menu_y, &direction_owned);
+                let _ = existing.navigate(new_url);
+                let app2 = app_for_main.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                    if let Some(w) = app2.webview_windows().get("menu") {
+                        let _ = w.show();
+                        eprintln!("show_menu: 延迟600ms后显示菜单窗口（复用）");
+                    }
+                });
+            }
+        });
+    } else {
+        // 创建路径：用 spawn_blocking，主线程在 build() 期间保持空闲
+        // Windows 上 WebView2 的 CreateCoreWebView2Controller 需要主线程消息泵响应
+        // 若在 run_on_main_thread 中调用 build()，主线程忙于闭包无法处理消息，导致死锁
+        // 改为 spawn_blocking 后，主线程空闲，与 create_login_window 模式完全一致
+        let app_clone = app.clone();
+        let direction_clone = submenu_direction.to_string();
+        tauri::async_runtime::spawn(async move {
+            let app2 = app_clone.clone();
+            let dir2 = direction_clone.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                create_menu_window(&app2, &dir2)
+            }).await;
+
+            match result {
+                Ok(Ok(w)) => {
+                    // 从 DOCK_STATE 读取位置（spawn_blocking 完成后可能与 show_menu 入参一致）
+                    let (mx, my) = {
+                        let s = DOCK_STATE.lock().unwrap();
+                        (s.menu_window_x, s.menu_window_y)
+                    };
+                    let _ = w.set_position(Position::Logical(LogicalPosition {
+                        x: mx as f64,
+                        y: my as f64,
+                    }));
+                    // 延迟 600ms 后显示，等待远程页面加载
+                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                     let _ = w.show();
-                    eprintln!("show_menu: 延迟600ms后显示菜单窗口");
+                    eprintln!("show_menu: 延迟600ms后显示菜单窗口（新建）");
                 }
-            });
-        }
-    });
+                Ok(Err(e)) => { eprintln!("show_menu: 创建菜单窗口失败: {}", e); }
+                Err(e) => { eprintln!("show_menu: spawn_blocking panic: {}", e); }
+            }
+        });
+    }
 }
 
 #[tauri::command]

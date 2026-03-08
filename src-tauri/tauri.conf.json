@@ -18,6 +18,7 @@
         "width": 120,
         "height": 120,
         "decorations": false,
+        "hiddenTitle": true,
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
