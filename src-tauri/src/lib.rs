@@ -1038,7 +1038,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     let builder = builder.hidden_title(true);
 
     let menu_window = builder
-        .on_navigation(move |url: tauri::Url| {
+        .on_navigation(move |url: &tauri::Url| {
             // 通用命令桥：解析 hash 中的 invoke=<命令名>[&param=val...]，执行白名单内的命令
             if let Some(fragment) = url.fragment() {
                 if let Some(rest) = fragment.strip_prefix("invoke=") {
@@ -1274,7 +1274,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
                 var _t = setInterval(checkLoginSuccess, 300);
             })();
         "#)
-        .on_navigation(move |url| {
+        .on_navigation(move |url: &tauri::Url| {
             let url_str = url.to_string();
             log_msg(&format!("[login-nav] {}", &url_str[..url_str.len().min(200)]));
 
