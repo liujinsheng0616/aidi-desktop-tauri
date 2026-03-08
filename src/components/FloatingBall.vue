@@ -34,6 +34,9 @@ let isDragging = false
 let dragStartTime = 0
 let dragStartMouseX = 0 // 拖拽开始时的鼠标位置
 let dragStartMouseY = 0
+let dragStartWindowX = 0 // 拖拽开始时的窗口物理坐标（由 prepare_drag 返回）
+let dragStartWindowY = 0
+let dragWindowReady = false // prepare_drag 是否已返回初始坐标
 let hasMoved = false
 const CLICK_THRESHOLD = 5 // 移动超过5像素认为是拖拽
 const CLICK_TIME_THRESHOLD = 350 // 按下超过350ms认为是拖拽（Windows IPC延迟较大，200ms过严）
@@ -57,7 +60,7 @@ function handleContextMenu(e: MouseEvent) {
 }
 
 // 鼠标按下 - 开始拖拽
-function handleMouseDown(e: MouseEvent) {
+async function handleMouseDown(e: MouseEvent) {
   // 右键显示菜单（仅生产模式）
   if (e.button === 2) {
     if (!isDev) {
@@ -93,13 +96,18 @@ function handleMouseDown(e: MouseEvent) {
   lastMouseX = e.screenX
   lastMouseY = e.screenY
 
-  // fire-and-forget：不 await，避免 IPC 延迟阻断 mousemove/mouseup 监听挂载
-  // 后端 prepare_drag 会在取消动画后立即记录当前物理位置（已包含 start_drag 的功能）
-  invoke('prepare_drag')
+  // 重置就绪标志（handleMouseMove 会等待 prepare_drag 返回后才开始移动）
+  dragWindowReady = false
 
-  // 立即挂载事件监听，不等待 IPC 返回，确保双击检测不被阻断
+  // 先挂载事件监听，不等待 IPC 返回，确保双击检测不被阻断
   document.addEventListener('mousemove', handleMouseMove)
   document.addEventListener('mouseup', handleMouseUp)
+
+  // await prepare_drag 取得窗口初始物理坐标，之后 mousemove 使用绝对坐标，无需 outer_position
+  const [wx, wy] = await invoke<[number, number]>('prepare_drag')
+  dragStartWindowX = wx
+  dragStartWindowY = wy
+  dragWindowReady = true
 }
 
 // 拖拽节流状态
@@ -108,32 +116,32 @@ let lastMouseX = 0
 let lastMouseY = 0
 const DRAG_THROTTLE_MS = 8 // 约 120fps，足够流畅
 
-// 鼠标移动 - 自定义拖拽逻辑（使用增量位置更新优化）
+// 鼠标移动 - 自定义拖拽逻辑（使用绝对坐标，Windows 上减少 Win32 API 调用）
 function handleMouseMove(e: MouseEvent) {
   if (!isDragging) return
+
+  // 等待 prepare_drag 返回初始坐标后再执行移动
+  if (!dragWindowReady) return
 
   // 节流：限制调用频率
   const now = Date.now()
   if (now - lastDragTime < DRAG_THROTTLE_MS) return
   lastDragTime = now
 
-  // 计算增量（相对于上次 mousemove）
-  const dx = e.screenX - lastMouseX
-  const dy = e.screenY - lastMouseY
-  lastMouseX = e.screenX
-  lastMouseY = e.screenY
-
-  // 检测是否移动了（用于区分点击和拖拽）
+  // 计算总偏移量（从拖拽起点到当前鼠标位置）
   const totalDx = e.screenX - dragStartMouseX
   const totalDy = e.screenY - dragStartMouseY
+
+  // 检测是否移动了（用于区分点击和拖拽）
   if (Math.abs(totalDx) > CLICK_THRESHOLD || Math.abs(totalDy) > CLICK_THRESHOLD) {
     hasMoved = true
   }
 
-  // 使用增量更新（后端原子操作，更快速）
-  // 乘以 devicePixelRatio 将逻辑像素转换为物理像素，与 outer_position() 的坐标体系一致
+  // 计算绝对目标坐标（物理像素），不依赖 outer_position，消除 Rust 侧额外 Win32 调用
   const dpr = window.devicePixelRatio || 1
-  invoke('move_window_by', { dx: Math.round(dx * dpr), dy: Math.round(dy * dpr) })
+  const newX = Math.round(dragStartWindowX + totalDx * dpr)
+  const newY = Math.round(dragStartWindowY + totalDy * dpr)
+  invoke('move_window_to', { x: newX, y: newY })
 }
 
 // 鼠标进入 - 触发吸附弹出

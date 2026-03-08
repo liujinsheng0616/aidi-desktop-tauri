@@ -113,7 +113,7 @@ if ($sizeGB -lt 0.5) {
 $output = @{
     dimension = "disk"
     status = $status
-    summary = [string]::Format("{0:N2} GB", $sizeGB) + " junk files found"
+    summary = [string]::Format("{0:N2} GB", $sizeGB) + " 垃圾文件"
     details = $results
 }
 

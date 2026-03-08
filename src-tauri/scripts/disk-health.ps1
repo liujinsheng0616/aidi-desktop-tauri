@@ -43,10 +43,12 @@ foreach ($vol in $volumes) {
     if ($vol.status -eq "warning") { $worstStatus = "warning" }
 }
 
+$statusLabel = if ($worstStatus -eq "danger") { "危险" } elseif ($worstStatus -eq "warning") { "警告" } else { "良好" }
+
 $output = @{
     dimension = "health"
     status = $worstStatus
-    summary = "$($volumes.Count) drives, Worst: $worstStatus"
+    summary = "$($volumes.Count) 个磁盘，状态: $statusLabel"
     details = @{
         volumes = $volumes
         physicalDisks = $physicalDisks

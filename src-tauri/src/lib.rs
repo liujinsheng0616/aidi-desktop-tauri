@@ -33,7 +33,7 @@ fn init_log_file() {
     }
 
     // 尝试多个日志位置，按优先级排序
-    // 优先级：本地数据目录 > 桌面 > 可执行文件同级目录 > 临时目录
+    // 优先级：本地数据目录 > 可执行文件同级目录 > 临时目录
     let log_locations: Vec<Option<std::path::PathBuf>> = vec![
         // 优先：本地应用数据目录（比桌面更可靠，Windows 11 + OneDrive 可能导致桌面路径问题）
         dirs::data_local_dir().map(|p| {
@@ -44,8 +44,6 @@ fn init_log_file() {
             }
             dir.join("debug.log")
         }),
-        // 备选：桌面（可能因 OneDrive 或权限问题失败）
-        dirs::desktop_dir().map(|p| p.join("aidi-debug.log")),
         // 备选：可执行文件同级目录
         std::env::current_exe().ok().and_then(|exe| {
             exe.parent().map(|p| p.join("aidi-debug.log"))
@@ -253,7 +251,7 @@ const HIDE_DELAY_MS: u64 = 400;
 const HIDE_DELAY_MS: u64 = 300;
 
 #[cfg(target_os = "windows")]
-const MENU_HIDE_DELAY_MS: u64 = 100;
+const MENU_HIDE_DELAY_MS: u64 = 300;
 #[cfg(not(target_os = "windows"))]
 const MENU_HIDE_DELAY_MS: u64 = 80;
 
@@ -466,7 +464,7 @@ fn open_panel(app: tauri::AppHandle) {
 /// 拖拽开始前准备：只更新状态，不移动窗口
 /// 使用自定义拖拽逻辑时，不需要移动窗口到 pop_out 位置
 #[tauri::command]
-fn prepare_drag(app: tauri::AppHandle) {
+fn prepare_drag(app: tauri::AppHandle) -> (i32, i32) {
     // 取消所有定时器
     next_state_version();
     {
@@ -484,12 +482,17 @@ fn prepare_drag(app: tauri::AppHandle) {
 
     // 立即记录当前物理位置到 DRAG_WINDOW_X/Y，避免 start_drag 的竞态问题
     // （动画线程可能正在修改位置，这里在取消动画后立即抢占）
-    if let Some(w) = app.webview_windows().get("main") {
+    let result = if let Some(w) = app.webview_windows().get("main") {
         if let Ok(pos) = w.outer_position() {
             DRAG_WINDOW_X.store(pos.x, Ordering::SeqCst);
             DRAG_WINDOW_Y.store(pos.y, Ordering::SeqCst);
+            (pos.x, pos.y)
+        } else {
+            (DRAG_WINDOW_X.load(Ordering::SeqCst), DRAG_WINDOW_Y.load(Ordering::SeqCst))
         }
-    }
+    } else {
+        (DRAG_WINDOW_X.load(Ordering::SeqCst), DRAG_WINDOW_Y.load(Ordering::SeqCst))
+    };
 
     // 更新状态，但不重置 is_docked（让 drag_end 处理）
     {
@@ -500,6 +503,8 @@ fn prepare_drag(app: tauri::AppHandle) {
         // 只重置 popped_out 状态，因为拖拽开始时球已经弹出了
         state.is_popped_out = false;
     }
+
+    result
 }
 
 #[tauri::command]
@@ -799,6 +804,14 @@ fn move_window_by(window: tauri::Window, dx: i32, dy: i32) {
     DRAG_WINDOW_X.store(new_x, Ordering::Relaxed);
     DRAG_WINDOW_Y.store(new_y, Ordering::Relaxed);
     let _ = window.set_position(Position::Physical(PhysicalPosition { x: new_x, y: new_y }));
+}
+
+/// 直接设置窗口绝对坐标（物理像素），不调用 outer_position，Windows 上性能更优
+#[tauri::command]
+fn move_window_to(window: tauri::Window, x: i32, y: i32) {
+    DRAG_WINDOW_X.store(x, Ordering::Relaxed);
+    DRAG_WINDOW_Y.store(y, Ordering::Relaxed);
+    let _ = window.set_position(Position::Physical(PhysicalPosition { x, y }));
 }
 
 #[tauri::command]
@@ -1437,6 +1450,45 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
         }
     }
     Ok(result)
+}
+
+/// 尝试从 auth.json 恢复登录状态（适用于 Windows localStorage 不持久的场景）
+/// 返回 true 表示恢复成功，false 表示 auth.json 不存在或 token 为空
+fn try_restore_auth_from_file(app: &tauri::AppHandle) -> bool {
+    let auth_path = match dirs::data_local_dir() {
+        Some(d) => d.join("AIDI Desktop").join("auth.json"),
+        None => {
+            log_msg("try_restore_auth: 无法获取 data_local_dir");
+            return false;
+        }
+    };
+    if !auth_path.exists() {
+        log_msg("try_restore_auth: auth.json 不存在");
+        return false;
+    }
+    let content = match std::fs::read_to_string(&auth_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log_msg(&format!("try_restore_auth: auth.json 读取失败: {:?}", e));
+            return false;
+        }
+    };
+    let val: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            log_msg(&format!("try_restore_auth: auth.json 解析失败: {:?}", e));
+            return false;
+        }
+    };
+    let token = val["token"].as_str().unwrap_or("");
+    if token.is_empty() {
+        log_msg("try_restore_auth: token 为空");
+        return false;
+    }
+    log_msg(&format!("try_restore_auth: 找到有效 auth.json (token前10字符={})，触发登录成功流程",
+        &token[..token.len().min(10)]));
+    handle_login_success(app);
+    true
 }
 
 /// 登录成功后的处理逻辑（从 on_login_success 抽取出来供 on_navigation 调用）
@@ -2531,13 +2583,19 @@ pub fn run() {
                 log_msg("错误: main 窗口未找到！");
             }
 
-            // 超时机制：如果前端 3 秒内没有调用 update_login_status，自动显示登录窗口
+            // 超时机制：如果前端 5 秒内没有调用 update_login_status，自动处理
             // 这处理了 Windows 上 main 窗口 visible=false 导致 WebView 不加载的问题
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_secs(5));
                 if !IS_LOGGED_IN.load(Ordering::SeqCst) {
-                    log_msg("前端 3 秒内未响应，自动显示登录窗口");
+                    log_msg("前端 5 秒内未响应，尝试从 auth.json 恢复登录状态");
+                    // 先尝试从 auth.json 恢复（适用于 Windows localStorage 不持久的场景）
+                    if try_restore_auth_from_file(&app_handle) {
+                        log_msg("auth.json 恢复成功，跳过登录窗口");
+                        return;
+                    }
+                    log_msg("auth.json 无有效 token，显示登录窗口");
                     if let Some(w) = app_handle.webview_windows().get("login") {
                         log_msg(&format!("login 窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
                             w.is_visible().unwrap_or(false),
@@ -2617,6 +2675,7 @@ pub fn run() {
             update_window_size,
             start_drag,
             move_window_by,
+            move_window_to,
             drag_end,
             hide_docked_ball,
             set_window_position,

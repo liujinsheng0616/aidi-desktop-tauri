@@ -13,10 +13,10 @@ $cs = Get-CimInstance Win32_ComputerSystem
 $bios = Get-CimInstance Win32_BIOS
 
 # Network Info - Get local IPv4 address
-$localIP = ""
-Get-NetIPAddressConfiguration | Where-Object { $_.AddressFamily -eq "IPv4" -and $_.IPAddress -notlike "127.*" } | Select-Object -First 1 | ForEach-Object {
-    $localIP = $_.IPAddress
-}
+$localIP = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+    Select-Object -First 1).IPAddress
+if (-not $localIP) { $localIP = "" }
 
 # CPU Info
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -44,7 +44,7 @@ $output = @{
         manufacturer = $cs.Manufacturer
         model = $cs.Model
         serialNumber = $bios.SerialNumber
-        manufactureDate = if ($bios.ReleaseDate) { "$($bios.ReleaseDate.Year)年$($bios.ReleaseDate.Month)月" } else { "Unknown" }
+        manufactureDate = if ($bios.ReleaseDate) { "$($bios.ReleaseDate.Year)年$($bios.ReleaseDate.Month)月" } else { "未知" }
         os = @{
             name = $os.Caption
             version = $os.Version
