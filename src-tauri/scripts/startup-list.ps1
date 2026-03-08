@@ -1,4 +1,4 @@
-# Startup List Script - Gets all startup items
+﻿# Startup List Script - Gets all startup items
 # Returns JSON with startup programs list
 
 # Fix Chinese encoding: Force UTF-8 output

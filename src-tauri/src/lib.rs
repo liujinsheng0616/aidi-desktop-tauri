@@ -356,6 +356,12 @@ fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
     let _ = window.show();
     BALL_VISIBLE.store(true, Ordering::SeqCst);
     sync_toggle_menu_item(&app, true);
+    // Windows 上 show() 后重新应用圆形遮罩，防止 WS_CAPTION 热区重现
+    if let Some(w) = app.get_webview_window("main") {
+        let ball_size_val = *BALL_SIZE.lock().unwrap();
+        let full_size = ball_size_val + BALL_PADDING * 2;
+        apply_circular_window_mask(&w, full_size);
+    }
 }
 
 #[tauri::command]
@@ -1089,6 +1095,10 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                     if let Some(w) = app2.webview_windows().get("main") {
                                         let _ = w.show();
                                         sync_toggle_menu_item(&app2, true);
+                                        // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
+                                        let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                        let full_size = ball_size_val + BALL_PADDING * 2;
+                                        apply_circular_window_mask(w, full_size);
                                     }
                                 }
                                 "hide_main_window" => {
@@ -1214,6 +1224,12 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 })();
 "#)
         .build()?;
+
+    // 禁用系统阴影/边框，与 main 窗口保持一致
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let _ = menu_window.set_shadow(false);
+    }
 
     // build() 返回后再异步 navigate 到远程 URL，避免阻塞 UI 线程
     log_msg(&format!("[create_menu_window] 窗口构建成功，开始 navigate 到 {}", menu_url_str));
@@ -1937,47 +1953,29 @@ fn run_script(script_name: &str) -> Result<serde_json::Value, String> {
     let script_path = get_script_path(script_name);
     let script_path_str = script_path.to_string_lossy().to_string();
 
-    let script_content = std::fs::read_to_string(&script_path)
-        .map_err(|e| format!("Failed to read script: {}", e))?;
-
-    let mut child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"])
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str])
         .creation_flags(CREATE_NO_WINDOW)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start PowerShell: {}", e))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(script_content.as_bytes());
-        // stdin drop → PowerShell 收到 EOF 开始执行
-    }
-
-    let output = child.wait_with_output()
-        .map_err(|e| format!("Failed to wait for script: {}", e))?;
+        .output()
+        .map_err(|e| format!("Failed to execute script: {}", e))?;
 
     let stdout_raw = output.stdout.clone();
     let stdout_lossy = String::from_utf8_lossy(&stdout_raw).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    // 诊断日志
-    eprintln!("[run_script] script={}, exit={}", script_path_str, output.status);
-    eprintln!("[run_script] stdout bytes[0..3]={:?}", stdout_raw.get(0..3));
-    eprintln!("[run_script] stdout={}", &stdout_lossy[..stdout_lossy.len().min(500)]);
+    log_msg(&format!("[run_script] script={}, exit={}", script_path_str, output.status));
     if !stderr.is_empty() {
-        eprintln!("[run_script] stderr={}", stderr);
+        log_msg(&format!("[run_script] stderr={}", stderr));
     }
 
     if !output.status.success() {
         return Err(format!("Script failed: {}", stderr));
     }
 
-    // 去除 UTF-8 BOM（Windows PowerShell 可能输出带 BOM 的 UTF-8）
+    // 去除 UTF-8 BOM（PowerShell 有时在输出中也带 BOM）
     let stdout = stdout_lossy.trim_start_matches('\u{FEFF}').trim().to_string();
 
-    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON: {} - Output: {}", e, stdout))
 }
 
 /// Execute a script with arguments and return its output as JSON
@@ -1991,36 +1989,20 @@ fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Val
     let script_path = get_script_path(script_name);
     let script_path_str = script_path.to_string_lossy().to_string();
 
-    let script_content = std::fs::read_to_string(&script_path)
-        .map_err(|e| format!("Failed to read script: {}", e))?;
-
-    let mut child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"])
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path_str])
         .env("SCRIPT_ARGS", args)
         .creation_flags(CREATE_NO_WINDOW)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start PowerShell: {}", e))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(script_content.as_bytes());
-    }
-
-    let output = child.wait_with_output()
-        .map_err(|e| format!("Failed to wait for script: {}", e))?;
+        .output()
+        .map_err(|e| format!("Failed to execute script: {}", e))?;
 
     let stdout_raw = output.stdout.clone();
     let stdout_lossy = String::from_utf8_lossy(&stdout_raw).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    eprintln!("[run_script_with_args] script={}, args={}, exit={}", script_path_str, args, output.status);
-    eprintln!("[run_script_with_args] stdout bytes[0..3]={:?}", stdout_raw.get(0..3));
-    eprintln!("[run_script_with_args] stdout={}", &stdout_lossy[..stdout_lossy.len().min(500)]);
+    log_msg(&format!("[run_script_with_args] script={}, args={}, exit={}", script_path_str, args, output.status));
     if !stderr.is_empty() {
-        eprintln!("[run_script_with_args] stderr={}", stderr);
+        log_msg(&format!("[run_script_with_args] stderr={}", stderr));
     }
 
     if !output.status.success() {
@@ -2030,7 +2012,7 @@ fn run_script_with_args(script_name: &str, args: &str) -> Result<serde_json::Val
     // 去除 UTF-8 BOM
     let stdout = stdout_lossy.trim_start_matches('\u{FEFF}').trim().to_string();
 
-    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {} - Output was: {}", e, stdout))
+    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON: {} - Output: {}", e, stdout))
 }
 
 /// Execute a script and return its output as JSON
@@ -2467,6 +2449,10 @@ pub fn run() {
                                             log_msg(&format!("[Tray] w.show() 结果: {:?}", r));
                                             BALL_VISIBLE.store(true, Ordering::SeqCst);
                                             sync_toggle_menu_item(&app, true);
+                                            // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
+                                            let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                            let full_size = ball_size_val + BALL_PADDING * 2;
+                                            apply_circular_window_mask(w, full_size);
                                         }
                                     } else {
                                         log_msg("[Tray] 错误: 找不到 main 窗口");
@@ -2601,6 +2587,10 @@ pub fn run() {
                             let _ = window.show();
                             BALL_VISIBLE.store(true, Ordering::SeqCst);
                             sync_toggle_menu_item(app, true);
+                            // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
+                            let ball_size_val = *BALL_SIZE.lock().unwrap();
+                            let full_size = ball_size_val + BALL_PADDING * 2;
+                            apply_circular_window_mask(window, full_size);
                         }
                     }
                 }
@@ -2633,7 +2623,17 @@ pub fn run() {
             // 这处理了 Windows 上 main 窗口 visible=false 导致 WebView 不加载的问题
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(5));
+                // 第一阶段：3秒后检查，若前端仍未响应则发事件提醒重新检查登录状态
+                std::thread::sleep(Duration::from_secs(3));
+                if IS_LOGGED_IN.load(Ordering::SeqCst) {
+                    return; // 前端已响应，正常退出
+                }
+                log_msg("超时线程: 前端 3 秒内未响应，发送 request-login-check 事件");
+                if let Some(main_win) = app_handle.webview_windows().get("main") {
+                    let _ = main_win.emit("request-login-check", ());
+                }
+                // 第二阶段：再等 2 秒（共 5 秒），若仍未响应则走 auth.json 兜底
+                std::thread::sleep(Duration::from_secs(2));
                 if !IS_LOGGED_IN.load(Ordering::SeqCst) {
                     log_msg("前端 5 秒内未响应，尝试从 auth.json 恢复登录状态");
                     // 先尝试从 auth.json 恢复（适用于 Windows localStorage 不持久的场景）

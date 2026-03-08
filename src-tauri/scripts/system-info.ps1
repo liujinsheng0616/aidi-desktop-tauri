@@ -1,4 +1,4 @@
-# System Info Script - Gets system hardware and OS information
+﻿# System Info Script - Gets system hardware and OS information
 # Returns JSON with system details
 
 # Fix Chinese encoding: Force UTF-8 output

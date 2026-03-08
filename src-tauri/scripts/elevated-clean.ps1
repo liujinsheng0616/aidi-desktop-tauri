@@ -1,4 +1,4 @@
-# Elevated Clean Script for Windows - Cleans categories requiring admin privileges
+﻿# Elevated Clean Script for Windows - Cleans categories requiring admin privileges
 # Input: JSON array of category keys
 
 # Fix Chinese encoding: Force UTF-8 output

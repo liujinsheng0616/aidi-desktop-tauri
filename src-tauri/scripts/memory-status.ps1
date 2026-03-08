@@ -1,4 +1,4 @@
-# Memory Status Script - Gets memory usage and top processes
+﻿# Memory Status Script - Gets memory usage and top processes
 # Returns JSON with memory info and process list
 
 # Fix Chinese encoding: Force UTF-8 output

@@ -1,4 +1,4 @@
-# Disk Health Script - Gets disk health and usage info
+﻿# Disk Health Script - Gets disk health and usage info
 # Returns JSON with disk information
 
 # Fix Chinese encoding: Force UTF-8 output

@@ -1,4 +1,4 @@
-# Disk Scan Script - Scans for junk files
+﻿# Disk Scan Script - Scans for junk files
 # Returns JSON with file list and total size
 
 # Fix Chinese encoding: Force UTF-8 output

@@ -125,6 +125,18 @@ onMounted(async () => {
     }
   })
 
+  // 监听 Rust 超时线程的重新检查请求（处理 Windows 上 WebView2 慢初始化场景）
+  listen('request-login-check', async () => {
+    if (initialized.value) return  // 已初始化，跳过
+    const loggedIn = isLoggedIn()
+    await invoke('update_login_status', { isLoggedIn: loggedIn })
+    if (loggedIn) {
+      await initApp()
+    } else {
+      await invoke('show_login_window')
+    }
+  })
+
   const loggedIn = isLoggedIn()
   // 应用启动时同步登录状态到 Rust 端（用于托盘菜单显示）
   await invoke('update_login_status', { isLoggedIn: loggedIn })
