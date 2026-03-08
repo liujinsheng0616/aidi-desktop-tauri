@@ -93,8 +93,6 @@ async function handleMouseDown(e: MouseEvent) {
   // 记录拖拽开始时的鼠标位置
   dragStartMouseX = e.screenX
   dragStartMouseY = e.screenY
-  lastMouseX = e.screenX
-  lastMouseY = e.screenY
 
   // 重置就绪标志（handleMouseMove 会等待 prepare_drag 返回后才开始移动）
   dragWindowReady = false
@@ -112,8 +110,6 @@ async function handleMouseDown(e: MouseEvent) {
 
 // 拖拽节流状态
 let lastDragTime = 0
-let lastMouseX = 0
-let lastMouseY = 0
 const DRAG_THROTTLE_MS = 8 // 约 120fps，足够流畅
 
 // 鼠标移动 - 自定义拖拽逻辑（使用绝对坐标，Windows 上减少 Win32 API 调用）
