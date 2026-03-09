@@ -293,7 +293,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION,
+            GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN,
         };
 
         if let Ok(hwnd) = window.hwnd() {
@@ -306,8 +306,13 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 SetWindowRgn(hwnd, Some(hrgn), true);
 
                 // 移除 WS_CAPTION 样式，彻底消除 Windows 标题栏热区（Snap Layout 触发区）
+                // 加入 WS_CLIPCHILDREN 样式，防止 WebView2 子 HWND 在宿主椭圆区域外重绘（左上角残影问题）
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
-                SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
+                SetWindowLongW(
+                    hwnd,
+                    GWL_STYLE,
+                    (style & !(WS_CAPTION.0 as i32)) | WS_CLIPCHILDREN.0 as i32,
+                );
             }
         }
     }
@@ -367,6 +372,13 @@ fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
 #[tauri::command]
 fn hide_main_window(app: tauri::AppHandle, window: tauri::Window) {
     let _ = window.hide();
+    // 隐藏其他所有打开的窗口
+    let windows = app.webview_windows();
+    for (label, win) in &windows {
+        if label != "main" {
+            let _ = win.hide();
+        }
+    }
     BALL_VISIBLE.store(false, Ordering::SeqCst);
     sync_toggle_menu_item(&app, false);
 }
@@ -2454,6 +2466,13 @@ pub fn run() {
                                         if visible {
                                             let r = w.hide();
                                             log_msg(&format!("[Tray] w.hide() 结果: {:?}", r));
+                                            // 隐藏其他所有打开的窗口
+                                            let windows = app.webview_windows();
+                                            for (label, win) in &windows {
+                                                if label != "main" {
+                                                    let _ = win.hide();
+                                                }
+                                            }
                                             BALL_VISIBLE.store(false, Ordering::SeqCst);
                                             sync_toggle_menu_item(&app, false);
                                         } else {
@@ -2593,6 +2612,13 @@ pub fn run() {
                         let visible = BALL_VISIBLE.load(Ordering::SeqCst);
                         if visible {
                             let _ = window.hide();
+                            // 隐藏其他所有打开的窗口
+                            let windows = app.webview_windows();
+                            for (label, win) in &windows {
+                                if label != "main" {
+                                    let _ = win.hide();
+                                }
+                            }
                             BALL_VISIBLE.store(false, Ordering::SeqCst);
                             sync_toggle_menu_item(app, false);
                         } else {
