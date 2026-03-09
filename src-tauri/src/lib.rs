@@ -318,7 +318,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 const REMOVE_MASK: i32 = 0x00CC_0000;
                 let new_style = (style & !REMOVE_MASK) | (WS_CLIPCHILDREN.0 as i32);
 
-                log_msg(&format!("[apply_circular_window_mask] remove_mask=0x{:08X}", remove_mask));
+                log_msg(&format!("[apply_circular_window_mask] REMOVE_MASK=0x{:08X}", REMOVE_MASK));
                 log_msg(&format!("[apply_circular_window_mask] 修改后 style=0x{:08X}", new_style));
 
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
