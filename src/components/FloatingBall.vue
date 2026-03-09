@@ -20,8 +20,8 @@ const colorThemes: Record<string, { primary: string; glow: string }> = {
   'midnight': { primary: '#1a1a1a', glow: 'rgba(50, 50, 50, 0.4)' },
 }
 
-// 判断是否为开发模式
-const isDev = import.meta.env.DEV
+// 判断是否为开发模式（临时注释，调试完成后恢复）
+// const isDev = import.meta.env.DEV
 
 // 使用设计规范中的 120px 作为基准尺寸
 const ballSize = computed(() => props.size || 60)
@@ -51,10 +51,10 @@ let hideDockTimeout: number | null = null
 let hoverVersion = 0
 
 // 右键菜单处理 - 临时禁用自定义菜单，保留 devtools 右键菜单用于调试
-function handleContextMenu(e: MouseEvent) {
+function handleContextMenu(_e: MouseEvent) {
   // 临时注释掉，允许 devtools 右键菜单
   // if (!isDev) {
-  //   e.preventDefault()
+  //   _e.preventDefault()
   //   // 自定义菜单在 handleMouseDown 中已处理
   // }
   // 保留 devtools 菜单用于调试
