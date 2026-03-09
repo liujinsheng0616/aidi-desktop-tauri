@@ -442,14 +442,15 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
         unsafe {
             // 1. 窗口样式
             let style = GetWindowLongW(hwnd, GWL_STYLE);
-            result.push_str(&format!("Style: 0x{:08X}\n", style));
+            let style_u32 = style as u32;
+            result.push_str(&format!("Style: 0x{:08X}\n", style_u32));
 
             // 解析样式位
-            let ws_visible = style & 0x10000000 != 0;
-            let ws_popup = style & 0x80000000 != 0;
-            let ws_caption = style & 0x00C00000 != 0;
-            let ws_border = style & 0x00800000 != 0;
-            let ws_thickframe = style & 0x00040000 != 0;
+            let ws_visible = style_u32 & 0x10000000 != 0;
+            let ws_popup = style_u32 & 0x80000000 != 0;
+            let ws_caption = style_u32 & 0x00C00000 != 0;
+            let ws_border = style_u32 & 0x00800000 != 0;
+            let ws_thickframe = style_u32 & 0x00040000 != 0;
             result.push_str(&format!(
                 "  WS_VISIBLE={} WS_POPUP={} WS_CAPTION={} WS_BORDER={} WS_THICKFRAME={}\n",
                 ws_visible, ws_popup, ws_caption, ws_border, ws_thickframe
@@ -457,12 +458,13 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
 
             // 2. 扩展样式
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            result.push_str(&format!("ExStyle: 0x{:08X}\n", ex_style));
+            let ex_style_u32 = ex_style as u32;
+            result.push_str(&format!("ExStyle: 0x{:08X}\n", ex_style_u32));
 
-            let ws_ex_layered = ex_style & 0x00080000 != 0;
-            let ws_ex_transparent = ex_style & 0x00000020 != 0;
-            let ws_ex_toolwindow = ex_style & 0x00000080 != 0;
-            let ws_ex_topmost = ex_style & 0x00000008 != 0;
+            let ws_ex_layered = ex_style_u32 & 0x00080000 != 0;
+            let ws_ex_transparent = ex_style_u32 & 0x00000020 != 0;
+            let ws_ex_toolwindow = ex_style_u32 & 0x00000080 != 0;
+            let ws_ex_topmost = ex_style_u32 & 0x00000008 != 0;
             result.push_str(&format!(
                 "  WS_EX_LAYERED={} WS_EX_TRANSPARENT={} WS_EX_TOOLWINDOW={} WS_EX_TOPMOST={}\n",
                 ws_ex_layered, ws_ex_transparent, ws_ex_toolwindow, ws_ex_topmost
