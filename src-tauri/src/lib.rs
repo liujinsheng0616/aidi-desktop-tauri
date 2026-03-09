@@ -369,7 +369,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 log_msg(&format!("[apply_circular_window_mask] DwmEnableBlurBehindWindow(hrgn_blur) 结果: {:?}", blur_result));
 
                 // 7. 【新增】设置 alpha 透明度（WS_EX_LAYERED 窗口必需）
-                let alpha_result = SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                let alpha_result = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
                 log_msg(&format!("[apply_circular_window_mask] SetLayeredWindowAttributes(255) 结果: {:?}", alpha_result));
 
                 // 8. 禁用 Windows 11 DWM 系统背景（解决灰色弧形背景问题）
