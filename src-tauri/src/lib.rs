@@ -293,7 +293,10 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN,
+            GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN, WS_THICKFRAME,
+        };
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED,
         };
 
         if let Ok(hwnd) = window.hwnd() {
@@ -302,16 +305,28 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
             let scale = window.scale_factor().unwrap_or(1.0);
             let phys_size = (size as f64 * scale) as i32;
             unsafe {
+                // 1. 设置椭圆遮罩
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
 
-                // 移除 WS_CAPTION 样式，彻底消除 Windows 标题栏热区（Snap Layout 触发区）
-                // 加入 WS_CLIPCHILDREN 样式，防止 WebView2 子 HWND 在宿主椭圆区域外重绘（左上角残影问题）
+                // 2. 移除 WS_CAPTION（Snap Layout 热区）和 WS_THICKFRAME（DWM 非客户区框架）
+                //    加入 WS_CLIPCHILDREN（减少子窗口重绘）
+                //    浮动球 resizable:false，移除 WS_THICKFRAME 不影响功能
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(
                     hwnd,
                     GWL_STYLE,
-                    (style & !(WS_CAPTION.0 as i32)) | WS_CLIPCHILDREN.0 as i32,
+                    (style & !(WS_CAPTION.0 as i32) & !(WS_THICKFRAME.0 as i32))
+                        | WS_CLIPCHILDREN.0 as i32,
+                );
+
+                // 3. 禁用 DWM 非客户区渲染，彻底消除变淡的标题栏按钮残影
+                let policy = DWMNCRP_DISABLED.0;
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_NCRENDERING_POLICY,
+                    &policy as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
                 );
             }
         }
