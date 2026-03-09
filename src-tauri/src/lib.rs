@@ -293,7 +293,9 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN, WS_THICKFRAME,
+            GetWindowLongW, SetWindowLongW, SetWindowPos,
+            GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_FRAMECHANGED,
         };
         use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
         use windows::Win32::UI::Controls::MARGINS;
@@ -308,20 +310,26 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
 
-                // 2. 移除 WS_CAPTION（Snap Layout 热区）和 WS_THICKFRAME（DWM 非客户区框架）
+                // 2. 只移除 WS_CAPTION（消除 Snap Layout 热区）
+                //    保留 WS_THICKFRAME：TAO 需要它通过 WM_NCCALCSIZE 把 NC 区域高度压为 0
                 //    加入 WS_CLIPCHILDREN（减少子窗口重绘）
-                //    浮动球 resizable:false，移除 WS_THICKFRAME 不影响功能
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(
                     hwnd,
                     GWL_STYLE,
-                    (style & !(WS_CAPTION.0 as i32) & !(WS_THICKFRAME.0 as i32))
-                        | WS_CLIPCHILDREN.0 as i32,
+                    (style & !(WS_CAPTION.0 as i32)) | WS_CLIPCHILDREN.0 as i32,
                 );
 
-                // 3. 将 DWM frame 收缩为不存在（全负 margins），彻底消除非客户区渲染
-                //    保持 DWM 合成器正常工作（透明有效），不产生白色残影
-                //    注意：不用 DWMNCRP_DISABLED，否则 DWM 停止透明合成导致永久白色残影
+                // 3. 强制 Windows 重新计算 NC 区域（触发 TAO 的 WM_NCCALCSIZE 拦截，NC 高度 → 0）
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+
+                // 4. 告知 DWM 不渲染任何 NC 帧（全负 margins），消除菜单弹出时的 DWM 按钮残影
+                //    保持 DWM 合成器正常工作，transparent:true 有效
                 let margins = MARGINS {
                     cxLeftWidth: -1,
                     cxRightWidth: -1,
