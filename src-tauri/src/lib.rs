@@ -296,6 +296,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
             GetWindowLongW, SetWindowLongW, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
             GWL_STYLE, GWL_EXSTYLE, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_CAPTION,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_FRAMECHANGED,
+            SetLayeredWindowAttributes, LWA_ALPHA,  // 新增：设置 alpha 透明度
         };
         use windows::Win32::Graphics::Dwm::{
             DwmExtendFrameIntoClientArea,
@@ -353,18 +354,25 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
                 log_msg("[apply_circular_window_mask] DwmExtendFrameIntoClientArea 完成");
 
-                // 5. Windows 10 专用：使用 DwmEnableBlurBehindWindow 实现透明
+                // 5. 【关键修改】先创建圆形区域
+                let hrgn_blur = CreateEllipticRgn(0, 0, phys_size, phys_size);
+
+                // 6. 【关键修改】使用圆形区域应用 BlurBehind（而不是 NULL）
                 // DWM_BB_ENABLE = 0x1, DWM_BB_BLURREGION = 0x2
                 let bb = DWM_BLURBEHIND {
-                    dwFlags: 0x1,  // DWM_BB_ENABLE
+                    dwFlags: 0x1 | 0x2,  // DWM_BB_ENABLE | DWM_BB_BLURREGION
                     fEnable: windows::Win32::Foundation::BOOL(1),
-                    hRgnBlur: windows::Win32::Graphics::Gdi::HRGN::default(),
+                    hRgnBlur: hrgn_blur,  // 使用圆形区域，而不是 HRGN::default()
                     fTransitionOnMaximized: windows::Win32::Foundation::BOOL(0),
                 };
                 let blur_result = DwmEnableBlurBehindWindow(hwnd, &bb);
-                log_msg(&format!("[apply_circular_window_mask] DwmEnableBlurBehindWindow 结果: {:?}", blur_result));
+                log_msg(&format!("[apply_circular_window_mask] DwmEnableBlurBehindWindow(hrgn_blur) 结果: {:?}", blur_result));
 
-                // 6. 禁用 Windows 11 DWM 系统背景（解决灰色弧形背景问题）
+                // 7. 【新增】设置 alpha 透明度（WS_EX_LAYERED 窗口必需）
+                let alpha_result = SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+                log_msg(&format!("[apply_circular_window_mask] SetLayeredWindowAttributes(255) 结果: {:?}", alpha_result));
+
+                // 8. 禁用 Windows 11 DWM 系统背景（解决灰色弧形背景问题）
                 // DWMSBT_NONE = 1 表示禁用所有系统背景效果
                 const DWMSBT_NONE: i32 = 1;
                 let backdrop_type: i32 = DWMSBT_NONE;
@@ -376,7 +384,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 );
                 log_msg(&format!("[apply_circular_window_mask] DwmSetWindowAttribute(DWMSBT_NONE) 结果: {:?}", result));
 
-                // 7. 设置圆形遮罩
+                // 9. 设置圆形遮罩（需要新的区域，因为上面被 DwmEnableBlurBehindWindow 消耗）
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg("[apply_circular_window_mask] SetWindowRgn 完成");
