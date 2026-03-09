@@ -28,7 +28,8 @@
         "visible": false,
         "x": 100,
         "y": 100,
-        "acceptFirstMouse": true
+        "acceptFirstMouse": true,
+        "devtools": true
       },
       {
         "label": "optimizer",
@@ -43,7 +44,8 @@
         "skipTaskbar": true,
         "resizable": false,
         "center": true,
-        "visible": false
+        "visible": false,
+        "devtools": true
       }
     ],
     "security": {

@@ -295,9 +295,8 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetWindowLongW, SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN, WS_THICKFRAME,
         };
-        use windows::Win32::Graphics::Dwm::{
-            DwmSetWindowAttribute, DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED,
-        };
+        use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+        use windows::Win32::UI::Controls::MARGINS;
 
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
@@ -320,14 +319,16 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                         | WS_CLIPCHILDREN.0 as i32,
                 );
 
-                // 3. 禁用 DWM 非客户区渲染，彻底消除变淡的标题栏按钮残影
-                let policy = DWMNCRP_DISABLED.0;
-                let _ = DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_NCRENDERING_POLICY,
-                    &policy as *const _ as *const std::ffi::c_void,
-                    std::mem::size_of::<u32>() as u32,
-                );
+                // 3. 将 DWM frame 收缩为不存在（全负 margins），彻底消除非客户区渲染
+                //    保持 DWM 合成器正常工作（透明有效），不产生白色残影
+                //    注意：不用 DWMNCRP_DISABLED，否则 DWM 停止透明合成导致永久白色残影
+                let margins = MARGINS {
+                    cxLeftWidth: -1,
+                    cxRightWidth: -1,
+                    cyTopHeight: -1,
+                    cyBottomHeight: -1,
+                };
+                let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
             }
         }
     }
@@ -1081,7 +1082,8 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(false);
+        .visible(false)
+        .devtools(true);
 
     #[cfg(target_os = "macos")]
     let builder = builder.hidden_title(true);
@@ -1299,6 +1301,7 @@ fn create_login_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, t
         .resizable(false)
         .center()
         .visible(true)
+        .devtools(true)
         // 注入脚本：监听 hash 变更，检测到登录成功后直接 invoke 通知 Rust
         .initialization_script(r#"
             (function() {
