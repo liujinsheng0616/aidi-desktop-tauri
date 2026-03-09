@@ -1695,6 +1695,12 @@ fn show_menu(app: tauri::AppHandle) {
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                     if let Some(w) = app2.webview_windows().get("menu") {
+                        // Windows 上复用窗口 navigate 也可能触发系统恢复 WS_CAPTION，修复 main 窗口遮罩
+                        if let Some(main_w) = app2.webview_windows().get("main") {
+                            let ball_size_val = *BALL_SIZE.lock().unwrap();
+                            let full_size = ball_size_val + BALL_PADDING * 2;
+                            apply_circular_window_mask(&main_w, full_size);
+                        }
                         let _ = w.show();
                         eprintln!("show_menu: 延迟600ms后显示菜单窗口（复用）");
                     }
@@ -1728,6 +1734,12 @@ fn show_menu(app: tauri::AppHandle) {
                     }));
                     // 延迟 600ms 后显示，等待远程页面加载
                     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                    // Windows 上新建 WebView2 窗口会导致系统恢复 WS_CAPTION，菜单 show() 前重新修复 main 窗口遮罩
+                    if let Some(main_w) = app_clone.webview_windows().get("main") {
+                        let ball_size_val = *BALL_SIZE.lock().unwrap();
+                        let full_size = ball_size_val + BALL_PADDING * 2;
+                        apply_circular_window_mask(&main_w, full_size);
+                    }
                     let _ = w.show();
                     eprintln!("show_menu: 延迟600ms后显示菜单窗口（新建）");
                 }
