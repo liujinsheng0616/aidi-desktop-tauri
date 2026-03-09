@@ -301,6 +301,8 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
             DwmExtendFrameIntoClientArea,
             DwmSetWindowAttribute,
             DWMWA_SYSTEMBACKDROP_TYPE,
+            DwmEnableBlurBehindWindow,
+            DWM_BLURBEHIND,
         };
         use windows::Win32::UI::Controls::MARGINS;
         use std::ffi::c_void;
@@ -351,7 +353,18 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
                 log_msg("[apply_circular_window_mask] DwmExtendFrameIntoClientArea 完成");
 
-                // 5. 禁用 Windows 11 DWM 系统背景（解决灰色弧形背景问题）
+                // 5. Windows 10 专用：使用 DwmEnableBlurBehindWindow 实现透明
+                // DWM_BB_ENABLE = 0x1, DWM_BB_BLURREGION = 0x2
+                let bb = DWM_BLURBEHIND {
+                    dwFlags: 0x1,  // DWM_BB_ENABLE
+                    fEnable: windows::Win32::Foundation::BOOL(1),
+                    hRgnBlur: windows::Win32::Graphics::Gdi::HRGN::default(),
+                    fTransitionOnMaximized: windows::Win32::Foundation::BOOL(0),
+                };
+                let blur_result = DwmEnableBlurBehindWindow(hwnd, &bb);
+                log_msg(&format!("[apply_circular_window_mask] DwmEnableBlurBehindWindow 结果: {:?}", blur_result));
+
+                // 6. 禁用 Windows 11 DWM 系统背景（解决灰色弧形背景问题）
                 // DWMSBT_NONE = 1 表示禁用所有系统背景效果
                 const DWMSBT_NONE: i32 = 1;
                 let backdrop_type: i32 = DWMSBT_NONE;
@@ -363,12 +376,12 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 );
                 log_msg(&format!("[apply_circular_window_mask] DwmSetWindowAttribute(DWMSBT_NONE) 结果: {:?}", result));
 
-                // 6. 设置圆形遮罩
+                // 7. 设置圆形遮罩
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg("[apply_circular_window_mask] SetWindowRgn 完成");
 
-                // 7. 再次移除 WS_CAPTION 样式位，彻底消除 Windows 11 Snap Layout 热区
+                // 8. 再次移除 WS_CAPTION 样式位，彻底消除 Windows 11 Snap Layout 热区
                 // 必须在 SetWindowRgn 之后执行！
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
