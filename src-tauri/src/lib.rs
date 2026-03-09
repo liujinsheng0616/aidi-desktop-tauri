@@ -297,8 +297,13 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
             GWL_STYLE, GWL_EXSTYLE, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_CAPTION,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_FRAMECHANGED,
         };
-        use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+        use windows::Win32::Graphics::Dwm::{
+            DwmExtendFrameIntoClientArea,
+            DwmSetWindowAttribute,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+        };
         use windows::Win32::UI::Controls::MARGINS;
+        use std::ffi::c_void;
 
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
@@ -346,12 +351,24 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
                 log_msg("[apply_circular_window_mask] DwmExtendFrameIntoClientArea 完成");
 
-                // 5. 设置圆形遮罩
+                // 5. 禁用 Windows 11 DWM 系统背景（解决灰色弧形背景问题）
+                // DWMSBT_NONE = 1 表示禁用所有系统背景效果
+                const DWMSBT_NONE: i32 = 1;
+                let backdrop_type: i32 = DWMSBT_NONE;
+                let result = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_SYSTEMBACKDROP_TYPE,
+                    &backdrop_type as *const i32 as *const c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+                log_msg(&format!("[apply_circular_window_mask] DwmSetWindowAttribute(DWMSBT_NONE) 结果: {:?}", result));
+
+                // 6. 设置圆形遮罩
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg("[apply_circular_window_mask] SetWindowRgn 完成");
 
-                // 6. 再次移除 WS_CAPTION 样式位，彻底消除 Windows 11 Snap Layout 热区
+                // 7. 再次移除 WS_CAPTION 样式位，彻底消除 Windows 11 Snap Layout 热区
                 // 必须在 SetWindowRgn 之后执行！
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
@@ -392,6 +409,14 @@ fn animate_to_position(
     // Ensure final position is exact
     if current_state_version() == expected_version {
         let _ = window.set_position(Position::Physical(PhysicalPosition { x: end_x, y: end_y }));
+
+        // 动画结束后重新应用圆形遮罩，解决灰色弧形背景问题
+        #[cfg(target_os = "windows")]
+        {
+            let ball_size_val = *BALL_SIZE.lock().unwrap();
+            let full_size = ball_size_val + BALL_PADDING * 2;
+            apply_circular_window_mask(window, full_size);
+        }
     }
 }
 
