@@ -294,7 +294,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
             GetWindowLongW, SetWindowLongW, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
-            GWL_STYLE, GWL_EXSTYLE, WS_CLIPCHILDREN, WS_EX_LAYERED,
+            GWL_STYLE, GWL_EXSTYLE, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_CAPTION,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_FRAMECHANGED,
         };
         use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
@@ -350,6 +350,12 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg("[apply_circular_window_mask] SetWindowRgn 完成");
+
+                // 6. 再次移除 WS_CAPTION 样式位，彻底消除 Windows 11 Snap Layout 热区
+                // 必须在 SetWindowRgn 之后执行！
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
+                log_msg("[apply_circular_window_mask] 再次移除 WS_CAPTION 完成");
             }
         }
     }
