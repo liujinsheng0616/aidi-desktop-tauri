@@ -418,6 +418,141 @@ fn schedule_refresh_ball_mask(app: &tauri::AppHandle) {
     });
 }
 
+/// Windows 专用：诊断悬浮球窗口状态
+/// 用于排查灰色弧形背景问题
+#[cfg(windows)]
+fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE,
+    };
+    use windows::Win32::Graphics::Gdi::GetWindowRgn;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClientRect, GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE,
+    };
+
+    let mut result = String::new();
+    result.push_str("=== Window Diagnosis ===\n");
+
+    if let Ok(hwnd) = window.hwnd() {
+        let hwnd = HWND(hwnd.0);
+        result.push_str(&format!("HWND: {:?}\n", hwnd.0));
+
+        unsafe {
+            // 1. 窗口样式
+            let style = GetWindowLongW(hwnd, GWL_STYLE);
+            result.push_str(&format!("Style: 0x{:08X}\n", style));
+
+            // 解析样式位
+            let ws_visible = style & 0x10000000 != 0;
+            let ws_popup = style & 0x80000000 != 0;
+            let ws_caption = style & 0x00C00000 != 0;
+            let ws_border = style & 0x00800000 != 0;
+            let ws_thickframe = style & 0x00040000 != 0;
+            result.push_str(&format!(
+                "  WS_VISIBLE={} WS_POPUP={} WS_CAPTION={} WS_BORDER={} WS_THICKFRAME={}\n",
+                ws_visible, ws_popup, ws_caption, ws_border, ws_thickframe
+            ));
+
+            // 2. 扩展样式
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            result.push_str(&format!("ExStyle: 0x{:08X}\n", ex_style));
+
+            let ws_ex_layered = ex_style & 0x00080000 != 0;
+            let ws_ex_transparent = ex_style & 0x00000020 != 0;
+            let ws_ex_toolwindow = ex_style & 0x00000080 != 0;
+            let ws_ex_topmost = ex_style & 0x00000008 != 0;
+            result.push_str(&format!(
+                "  WS_EX_LAYERED={} WS_EX_TRANSPARENT={} WS_EX_TOOLWINDOW={} WS_EX_TOPMOST={}\n",
+                ws_ex_layered, ws_ex_transparent, ws_ex_toolwindow, ws_ex_topmost
+            ));
+
+            // 3. 窗口矩形
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            let _ = GetWindowRect(hwnd, &mut rect);
+            result.push_str(&format!(
+                "WindowRect: ({}, {}) - ({}, {}) [{}x{}]\n",
+                rect.left,
+                rect.top,
+                rect.right,
+                rect.bottom,
+                rect.right - rect.left,
+                rect.bottom - rect.top
+            ));
+
+            // 4. 客户区矩形
+            let mut client_rect = windows::Win32::Foundation::RECT::default();
+            let _ = GetClientRect(hwnd, &mut client_rect);
+            result.push_str(&format!(
+                "ClientRect: ({}, {}) - ({}, {}) [{}x{}]\n",
+                client_rect.left,
+                client_rect.top,
+                client_rect.right,
+                client_rect.bottom,
+                client_rect.right - client_rect.left,
+                client_rect.bottom - client_rect.top
+            ));
+
+            // 5. 窗口区域 (Region)
+            let region_result = GetWindowRgn(hwnd, windows::Win32::Graphics::Gdi::HRGN::default());
+            result.push_str(&format!("Region result: {:?} (0=ERROR, 1=NULLREGION, 2=SIMPLEREGION, 3=COMPLEXREGION)\n", region_result));
+
+            // 6. DWM 扩展帧边界
+            let mut bounds = windows::Win32::Foundation::RECT::default();
+            let dwm_result = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut bounds as *mut _ as *mut c_void,
+                std::mem::size_of::<windows::Win32::Foundation::RECT>() as u32,
+            );
+            result.push_str(&format!(
+                "DWM ExtendedFrameBounds: ({}, {}) - ({}, {}) [result: {:?}]\n",
+                bounds.left, bounds.top, bounds.right, bounds.bottom, dwm_result
+            ));
+
+            // 计算与 WindowRect 的差异（表示非客户区大小）
+            let nc_left = rect.left - bounds.left;
+            let nc_top = rect.top - bounds.top;
+            let nc_right = bounds.right - rect.right;
+            let nc_bottom = bounds.bottom - rect.bottom;
+            result.push_str(&format!(
+                "  Non-client margins: left={} top={} right={} bottom={}\n",
+                nc_left, nc_top, nc_right, nc_bottom
+            ));
+
+            // 7. DWM 系统背景类型
+            let mut backdrop_type: i32 = 0;
+            let backdrop_result = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_SYSTEMBACKDROP_TYPE,
+                &mut backdrop_type as *mut i32 as *mut c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+            result.push_str(&format!(
+                "DWM SystemBackdropType: {} [result: {:?}] (1=NONE, 2=MICA, 3=ACRYLIC, 4=TABBED)\n",
+                backdrop_type, backdrop_result
+            ));
+        }
+    } else {
+        result.push_str("Error: Failed to get HWND\n");
+    }
+
+    result.push_str("=======================\n");
+    result
+}
+
+#[cfg(not(windows))]
+fn diagnose_window_state(_window: &tauri::WebviewWindow) -> String {
+    "Diagnosis only available on Windows".to_string()
+}
+
+/// Tauri 命令：诊断悬浮球窗口状态
+#[tauri::command]
+fn diagnose_window(window: tauri::WebviewWindow) -> String {
+    diagnose_window_state(&window)
+}
+
 // Animate window to target position with easing
 fn animate_to_position(
     window: &tauri::WebviewWindow,
@@ -2922,6 +3057,7 @@ pub fn run() {
             on_login_success,
             log_debug,
             save_login_info,
+            diagnose_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
