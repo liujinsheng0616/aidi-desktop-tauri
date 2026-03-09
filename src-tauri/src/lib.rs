@@ -2725,15 +2725,19 @@ pub fn run() {
                         let _ = main_win.on_window_event(move |event| {
                             if let tauri::WindowEvent::Focused(false) = event {
                                 let app_clone = app_handle.clone();
-                                // 延迟刷新，等待 Windows DWM 完成状态更新
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    if let Some(w) = app_clone.webview_windows().get("main") {
-                                        let ball_size_val = *BALL_SIZE.lock().unwrap();
-                                        let full_size = ball_size_val + BALL_PADDING * 2;
-                                        apply_circular_window_mask(&w, full_size);
-                                        log_msg("[on_blur] 已刷新悬浮球遮罩");
-                                    }
+                                // 使用 async runtime 延迟后在主线程执行
+                                // 关键：不能用 std::thread::spawn，会破坏圆形遮罩
+                                tauri::async_runtime::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                    let app2 = app_clone.clone();
+                                    let _ = app_clone.run_on_main_thread(move || {
+                                        if let Some(w) = app2.webview_windows().get("main") {
+                                            let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                            let full_size = ball_size_val + BALL_PADDING * 2;
+                                            apply_circular_window_mask(&w, full_size);
+                                            log_msg("[on_blur] 已刷新悬浮球遮罩");
+                                        }
+                                    });
                                 });
                             }
                         });
