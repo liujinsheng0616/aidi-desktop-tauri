@@ -313,13 +313,11 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 log_msg(&format!("[apply_circular_window_mask] 修改前 style=0x{:08X}", style));
 
-                // 直接使用十六进制掩码，避免类型转换问题
-                // 要移除的样式：WS_CAPTION(0x00C00000) | WS_THICKFRAME(0x00040000) | WS_DLGFRAME(0x00400000) | WS_BORDER(0x00800000)
-                let remove_mask: i32 = 0x00C0_0000 | 0x0004_0000 | 0x0040_0000 | 0x0080_0000;  // = 0x01840000
+                // 直接使用 Windows API 常量计算掩码，避免十六进制字面量计算问题
+                let remove_mask = (WS_CAPTION | WS_THICKFRAME | WS_DLGFRAME | WS_BORDER).0 as i32;
                 let new_style = (style & !remove_mask) | (WS_CLIPCHILDREN.0 as i32);
 
                 log_msg(&format!("[apply_circular_window_mask] remove_mask=0x{:08X}", remove_mask));
-                log_msg(&format!("[apply_circular_window_mask] WS_CLIPCHILDREN=0x{:08X}", WS_CLIPCHILDREN.0));
                 log_msg(&format!("[apply_circular_window_mask] 修改后 style=0x{:08X}", new_style));
 
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
