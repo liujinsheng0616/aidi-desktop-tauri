@@ -293,8 +293,8 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, SetWindowPos,
-            GWL_STYLE, WS_CAPTION, WS_CLIPCHILDREN, WS_THICKFRAME, WS_DLGFRAME, WS_BORDER,
+            GetWindowLongW, SetWindowLongW, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
+            GWL_STYLE, GWL_EXSTYLE, WS_CLIPCHILDREN, WS_EX_LAYERED,
             SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_FRAMECHANGED,
         };
         use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
@@ -309,21 +309,25 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 size, scale, phys_size));
 
             unsafe {
-                // 1. 先移除所有 frame 相关样式（消除 NC 区域）
+                // 1. 添加 WS_EX_LAYERED 扩展样式（透明窗口必需！）
+                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                let new_ex_style = ex_style | WS_EX_LAYERED.0 as isize;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style);
+                log_msg(&format!("[apply_circular_window_mask] 添加 WS_EX_LAYERED: 0x{:08X} -> 0x{:08X}",
+                    ex_style, new_ex_style));
+
+                // 2. 移除边框样式
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 log_msg(&format!("[apply_circular_window_mask] 修改前 style=0x{:08X}", style));
 
-                // 硬编码正确的掩码值: 不依赖 Windows 常量
                 // WS_CAPTION=0x00C00000 | WS_THICKFRAME=0x00040000 | WS_DLGFRAME=0x00400000 | WS_BORDER=0x00800000
                 const REMOVE_MASK: i32 = 0x00CC_0000;
                 let new_style = (style & !REMOVE_MASK) | (WS_CLIPCHILDREN.0 as i32);
 
-                log_msg(&format!("[apply_circular_window_mask] REMOVE_MASK=0x{:08X}", REMOVE_MASK));
                 log_msg(&format!("[apply_circular_window_mask] 修改后 style=0x{:08X}", new_style));
-
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
 
-                // 2. 强制 Windows 重新计算 frame（关键！）
+                // 3. 强制 Windows 重新计算 frame
                 let _ = SetWindowPos(
                     hwnd,
                     None,
@@ -332,12 +336,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 );
                 log_msg("[apply_circular_window_mask] SetWindowPos(SWP_FRAMECHANGED) 完成");
 
-                // 3. 再设置圆形遮罩（此时 NC 区域已消除）
-                let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
-                SetWindowRgn(hwnd, Some(hrgn), true);
-                log_msg("[apply_circular_window_mask] SetWindowRgn 完成");
-
-                // 4. DWM 扩展帧消除按钮残影
+                // 4. DWM 扩展帧实现透明
                 let margins = MARGINS {
                     cxLeftWidth: -1,
                     cxRightWidth: -1,
@@ -346,6 +345,11 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 };
                 let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
                 log_msg("[apply_circular_window_mask] DwmExtendFrameIntoClientArea 完成");
+
+                // 5. 设置圆形遮罩
+                let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
+                SetWindowRgn(hwnd, Some(hrgn), true);
+                log_msg("[apply_circular_window_mask] SetWindowRgn 完成");
             }
         }
     }
