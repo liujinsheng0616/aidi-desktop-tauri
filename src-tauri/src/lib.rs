@@ -376,6 +376,20 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 );
                 log_msg(&format!("[apply_circular_window_mask] DwmSetWindowAttribute(DWMSBT_NONE) 结果: {:?}", result));
 
+                // 6.5 禁用非客户区渲染（标题栏等），解决灰色弧形背景问题
+                // DWMWA_NCRENDERING_POLICY = 2
+                // DWMNCRP_DISABLED = 1
+                const DWMWA_NCRENDERING_POLICY: u32 = 2;
+                const DWMNCRP_DISABLED: i32 = 1;
+                let nc_policy: i32 = DWMNCRP_DISABLED;
+                let nc_result = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_NCRENDERING_POLICY,
+                    &nc_policy as *const i32 as *const c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+                log_msg(&format!("[apply_circular_window_mask] DwmSetWindowAttribute(NCRENDERING_POLICY=DISABLED) 结果: {:?}", nc_result));
+
                 // 7. 设置圆形遮罩
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 SetWindowRgn(hwnd, Some(hrgn), true);
@@ -2704,6 +2718,27 @@ pub fn run() {
                     // App.vue 内部根据 token 再决定显示浮动球或登录窗口
                     let _ = window.show();
                     let _ = window.hide();
+
+                    // Windows 专用：监听窗口失去焦点事件，自动刷新圆形遮罩
+                    // 解决：点击其他应用后悬浮球出现灰色背景的问题
+                    #[cfg(target_os = "windows")]
+                    {
+                        let app_handle = app.handle().clone();
+                        let main_win = window.clone();
+                        let _ = main_win.on_blur(move || {
+                            let app_clone = app_handle.clone();
+                            // 延迟刷新，等待 Windows DWM 完成状态更新
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                                if let Some(w) = app_clone.webview_windows().get("main") {
+                                    let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                    let full_size = ball_size_val + BALL_PADDING * 2;
+                                    apply_circular_window_mask(&w, full_size);
+                                    log_msg("[on_blur] 已刷新悬浮球遮罩");
+                                }
+                            });
+                        });
+                    }
                 }
 
             }
