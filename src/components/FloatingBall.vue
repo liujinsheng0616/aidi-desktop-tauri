@@ -50,23 +50,25 @@ let hoverTimeout: number | null = null
 let hideDockTimeout: number | null = null
 let hoverVersion = 0
 
-// 右键菜单处理 - 开发模式下保留默认行为以支持 Inspect
+// 右键菜单处理 - 临时禁用自定义菜单，保留 devtools 右键菜单用于调试
 function handleContextMenu(e: MouseEvent) {
-  if (!isDev) {
-    e.preventDefault()
-    // 自定义菜单在 handleMouseDown 中已处理
-  }
-  // 开发模式下不阻止默认行为，允许打开 DevTools
+  // 临时注释掉，允许 devtools 右键菜单
+  // if (!isDev) {
+  //   e.preventDefault()
+  //   // 自定义菜单在 handleMouseDown 中已处理
+  // }
+  // 保留 devtools 菜单用于调试
 }
 
 // 鼠标按下 - 开始拖拽
 async function handleMouseDown(e: MouseEvent) {
-  // 右键显示菜单（仅生产模式）
+  // 右键 - 临时禁用自定义菜单，保留 devtools 右键菜单用于调试
   if (e.button === 2) {
-    if (!isDev) {
-      e.preventDefault()
-      invoke('show_menu')
-    }
+    // 临时注释，保留 devtools 右键菜单
+    // if (!isDev) {
+    //   e.preventDefault()
+    //   invoke('show_menu')
+    // }
     return
   }
 
