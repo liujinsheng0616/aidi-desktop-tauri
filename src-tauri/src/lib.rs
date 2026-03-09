@@ -313,9 +313,10 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 log_msg(&format!("[apply_circular_window_mask] 修改前 style=0x{:08X}", style));
 
-                // 直接使用 Windows API 常量计算掩码，避免十六进制字面量计算问题
-                let remove_mask = (WS_CAPTION | WS_THICKFRAME | WS_DLGFRAME | WS_BORDER).0 as i32;
-                let new_style = (style & !remove_mask) | (WS_CLIPCHILDREN.0 as i32);
+                // 硬编码正确的掩码值: 不依赖 Windows 常量
+                // WS_CAPTION=0x00C00000 | WS_THICKFRAME=0x00040000 | WS_DLGFRAME=0x00400000 | WS_BORDER=0x00800000
+                const REMOVE_MASK: i32 = 0x00CC_0000;
+                let new_style = (style & !REMOVE_MASK) | (WS_CLIPCHILDREN.0 as i32);
 
                 log_msg(&format!("[apply_circular_window_mask] remove_mask=0x{:08X}", remove_mask));
                 log_msg(&format!("[apply_circular_window_mask] 修改后 style=0x{:08X}", new_style));
