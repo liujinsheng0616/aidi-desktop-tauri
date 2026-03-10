@@ -1095,7 +1095,7 @@ fn drag_end(app: tauri::AppHandle) {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_STYLE};
         if let Ok(raw_hwnd) = main_window.hwnd() {
-            let hwnd = HWND(raw_hwnd.0 as isize);
+            let hwnd = HWND(raw_hwnd.0);
             unsafe {
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 log_msg(&format!("[drag_end] 拖动结束时窗口样式=0x{:X}", style));
