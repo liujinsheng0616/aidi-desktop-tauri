@@ -360,17 +360,13 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
                 // 2. 强制设置正确的窗口样式
-                // 使用 Tauri 初始样式 + WS_VISIBLE
-                // Tauri 初始样式 0x04CB0000 包含:
-                //   - WS_CLIPSIBLINGS (0x04000000)
-                //   - WS_BORDER (0x00800000)
-                //   - WS_DLGFRAME (0x00400000)
-                //   - WS_SYSMENU (0x00080000)
-                //   - WS_MINIMIZEBOX (0x00020000)
-                //   - WS_MAXIMIZEBOX (0x00010000)
-                // 加上 WS_VISIBLE (0x10000000) = 0x14CB0000
-                // 这个样式经过验证：在 init_position 时无灰色背景
-                const CORRECT_STYLE: i32 = 0x14CB0000;
+                // 移除所有标题栏相关样式，只保留基本样式
+                // WS_VISIBLE (0x10000000) - 窗口可见
+                // WS_CLIPSIBLINGS (0x04000000) - 裁剪兄弟窗口
+                // WS_CLIPCHILDREN (0x02000000) - 裁剪子窗口
+                // 总计 = 0x16000000
+                // 此样式：无边框、无标题栏按钮、无灰色背景
+                const CORRECT_STYLE: i32 = 0x16000000;
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
                 log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x{:X}", caller, old_style, CORRECT_STYLE));
