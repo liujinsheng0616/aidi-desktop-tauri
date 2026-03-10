@@ -302,20 +302,38 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
 
-            // 获取 DPI 缩放因子，将逻辑像素转换为物理像素
+            // 获取 DPI 缩放因子（用于日志对比）
             let scale_factor = window.scale_factor().unwrap_or(1.0);
-            let phys_size = (size as f64 * scale_factor) as i32;
+            let calculated_phys_size = (size as f64 * scale_factor) as i32;
 
-            log_msg(&format!("[apply_circular_window_mask] 开始 size={} phys_size={} scale={}", size, phys_size, scale_factor));
+            // 关键修复：获取窗口实际的物理尺寸，而不是手动计算
+            let (phys_size, outer_width, outer_height) = if let Ok(outer_size) = window.outer_size() {
+                // outer_size 返回 PhysicalSize，直接使用
+                let w = outer_size.width as i32;
+                let h = outer_size.height as i32;
+                (w.max(h), w, h)
+            } else {
+                // 回退到手动计算
+                (calculated_phys_size, calculated_phys_size, calculated_phys_size)
+            };
+
+            // 详细日志：对比手动计算 vs 实际尺寸
+            log_msg(&format!(
+                "[apply_circular_window_mask] 输入size={} scale={:.2} 计算phys={} 实际outer={}x{} 使用phys={}",
+                size, scale_factor, calculated_phys_size, outer_width, outer_height, phys_size
+            ));
 
             unsafe {
-                // 1. 设置圆形窗口遮罩（关键：让窗口本身变圆，消除灰色背景）
+                // 1. 设置圆形窗口遮罩（使用实际物理尺寸）
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
-                SetWindowRgn(hwnd, Some(hrgn), true);
+                let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
+                log_msg(&format!("[apply_circular_window_mask] SetWindowRgn result={:?}", rgn_result));
 
-                // 2. 移除 WS_CAPTION 样式位，彻底消除 Windows 11 标题栏热区
-                let style = GetWindowLongW(hwnd, GWL_STYLE);
-                SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
+                // 2. 移除 WS_CAPTION 样式位，消除 Windows 11 标题栏热区
+                let old_style = GetWindowLongW(hwnd, GWL_STYLE);
+                let new_style = old_style & !(WS_CAPTION.0 as i32);
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+                log_msg(&format!("[apply_circular_window_mask] WS_CAPTION: old_style=0x{:X} new_style=0x{:X}", old_style, new_style));
 
                 // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -340,7 +358,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
 
-                log_msg("[apply_circular_window_mask] 完成（使用 SetWindowRgn）");
+                log_msg("[apply_circular_window_mask] 完成");
             }
         }
     }
