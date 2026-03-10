@@ -317,8 +317,10 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: visible;
-  pointer-events: auto;   /* 父容器穿透后，球体恢复响应鼠标事件 */
+  overflow: hidden;        /* 隐藏圆角外的内容 */
+  border-radius: 50%;      /* 添加圆形（Windows 上替代 SetWindowRgn） */
+  background: transparent; /* 确保背景透明 */
+  pointer-events: auto;    /* 父容器穿透后，球体恢复响应鼠标事件 */
 }
 
 /* 内部内容容器 - 固定 60px 基准尺寸 */
