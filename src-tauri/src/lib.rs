@@ -359,16 +359,14 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
-                // 2. 强制设置正确的窗口样式
-                // 使用 V2 验证过的样式：0x14CB0000
-                // WS_VISIBLE (0x10000000) | WS_CLIPSIBLINGS (0x04000000)
-                // | WS_BORDER (0x00800000) | WS_DLGFRAME (0x00400000)
-                // | WS_SYSMENU (0x00080000) | WS_MINIMIZEBOX (0x00020000) | WS_MAXIMIZEBOX (0x00010000)
-                // 此样式经过验证：拖动后无灰色背景
-                const CORRECT_STYLE: i32 = 0x14CB0000u32 as i32;
+                // 2. 清除标题栏装饰相关样式位，保留其他原始位（避免破坏 DWM 内部状态）
+                // 清除：WS_CAPTION(0xC00000) | WS_BORDER(0x800000) | WS_DLGFRAME(0x400000)
+                //       | WS_SYSMENU(0x80000) | WS_MINIMIZEBOX(0x20000) | WS_MAXIMIZEBOX(0x10000) | WS_THICKFRAME(0x40000)
+                const DECORATION_MASK: i32 = 0x00CF0000u32 as i32;
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
-                SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
-                log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x{:X}", caller, old_style, CORRECT_STYLE));
+                let new_style = old_style & !DECORATION_MASK;
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+                log_msg(&format!("[apply_circular_window_mask] caller={} Style: 0x{:X} -> 0x{:X} (清除装饰位)", caller, old_style, new_style));
 
                 // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
