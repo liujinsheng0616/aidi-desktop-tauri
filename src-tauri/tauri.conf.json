@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AIDI",
+        "title": "",
         "url": "index.html",
         "width": 120,
         "height": 120,
@@ -42,7 +42,7 @@
         "transparent": true,
         "shadow": true,
         "alwaysOnTop": false,
-        "skipTaskbar": true,
+        "skipTaskbar": false,
         "resizable": false,
         "center": true,
         "visible": false,
