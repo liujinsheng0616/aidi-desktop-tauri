@@ -437,7 +437,7 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
 
     if let Ok(hwnd) = window.hwnd() {
         let hwnd = HWND(hwnd.0);
-        result.push_str(&format!("HWND: {}\n", hwnd.0));
+        result.push_str(&format!("HWND: {:p}\n", hwnd.0));
 
         unsafe {
             // 1. 窗口样式
