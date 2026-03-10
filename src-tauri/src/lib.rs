@@ -268,11 +268,14 @@ fn ease_out_cubic(t: f32) -> f32 {
 }
 
 /// 设置窗口为圆形
-fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
+/// caller: 调用来源标识，用于诊断日志对比（如 "init", "on_blur", "after_menu", "show"）
+fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: &str) {
     #[cfg(target_os = "macos")]
     {
         use cocoa::base::{id, nil, YES};
         use objc::{msg_send, sel, sel_impl};
+
+        log_msg(&format!("[apply_circular_window_mask] caller={} size={} (macOS)", caller, size));
 
         if let Ok(ns_window) = window.ns_window() {
             let ns_window = ns_window as id;
@@ -317,23 +320,50 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 (calculated_phys_size, calculated_phys_size, calculated_phys_size)
             };
 
-            // 详细日志：对比手动计算 vs 实际尺寸
-            log_msg(&format!(
-                "[apply_circular_window_mask] 输入size={} scale={:.2} 计算phys={} 实际outer={}x{} 使用phys={}",
-                size, scale_factor, calculated_phys_size, outer_width, outer_height, phys_size
-            ));
-
             unsafe {
+                // === 对比诊断：获取完整的窗口状态 ===
+                let mut window_rect = windows::Win32::Foundation::RECT::default();
+                let _ = GetWindowRect(hwnd, &mut window_rect);
+                let mut client_rect = windows::Win32::Foundation::RECT::default();
+                let _ = GetClientRect(hwnd, &mut client_rect);
+
+                // 获取客户区左上角在屏幕上的位置
+                let mut client_top_left = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+                let _ = ClientToScreen(hwnd, &mut client_top_left);
+
+                // 计算客户区偏移（客户区相对于窗口左上角的偏移）
+                let offset_x = client_top_left.x - window_rect.left;
+                let offset_y = client_top_left.y - window_rect.top;
+
+                // 获取 DWM 扩展边界
+                let mut dwm_rect = windows::Win32::Foundation::RECT::default();
+                let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                    &mut dwm_rect as *mut _ as *mut c_void, std::mem::size_of::<windows::Win32::Foundation::RECT>() as u32);
+
+                // 获取当前窗口样式
+                let current_style = GetWindowLongW(hwnd, GWL_STYLE);
+
+                log_msg(&format!(
+                    "[诊断] caller={} WindowRect=({},{})-({},{}) [{}x{}] ClientRect={}x{} offset=({},{}) DWMRect=({},{})-({},{}) Style=0x{:X}",
+                    caller,
+                    window_rect.left, window_rect.top, window_rect.right, window_rect.bottom,
+                    window_rect.right - window_rect.left, window_rect.bottom - window_rect.top,
+                    client_rect.right - client_rect.left, client_rect.bottom - client_rect.top,
+                    offset_x, offset_y,
+                    dwm_rect.left, dwm_rect.top, dwm_rect.right, dwm_rect.bottom,
+                    current_style
+                ));
+
                 // 1. 设置圆形窗口遮罩（使用实际物理尺寸）
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
                 let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
-                log_msg(&format!("[apply_circular_window_mask] SetWindowRgn result={:?}", rgn_result));
+                log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
                 // 2. 移除 WS_CAPTION 样式位，消除 Windows 11 标题栏热区
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 let new_style = old_style & !(WS_CAPTION.0 as i32);
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
-                log_msg(&format!("[apply_circular_window_mask] WS_CAPTION: old_style=0x{:X} new_style=0x{:X}", old_style, new_style));
+                log_msg(&format!("[apply_circular_window_mask] caller={} WS_CAPTION: old_style=0x{:X} new_style=0x{:X}", caller, old_style, new_style));
 
                 // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -358,7 +388,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
 
-                log_msg("[apply_circular_window_mask] 完成");
+                log_msg(&format!("[apply_circular_window_mask] caller={} 完成", caller));
             }
         }
     }
@@ -374,7 +404,7 @@ fn schedule_refresh_ball_mask(app: &tauri::AppHandle) {
         if let Some(main_w) = app_clone.webview_windows().get("main") {
             let ball_size_val = *BALL_SIZE.lock().unwrap();
             let full_size = ball_size_val + BALL_PADDING * 2;
-            apply_circular_window_mask(&main_w, full_size);
+            apply_circular_window_mask(&main_w, full_size, "schedule_refresh");
             log_msg("[schedule_refresh_ball_mask] 已刷新悬浮球遮罩");
         }
     });
@@ -560,7 +590,7 @@ fn animate_to_position(
         {
             let ball_size_val = *BALL_SIZE.lock().unwrap();
             let full_size = ball_size_val + BALL_PADDING * 2;
-            apply_circular_window_mask(window, full_size);
+            apply_circular_window_mask(window, full_size, "after_animation");
         }
     }
 }
@@ -578,7 +608,7 @@ fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
     if let Some(w) = app.get_webview_window("main") {
         let ball_size_val = *BALL_SIZE.lock().unwrap();
         let full_size = ball_size_val + BALL_PADDING * 2;
-        apply_circular_window_mask(&w, full_size);
+        apply_circular_window_mask(&w, full_size, "show_main");
     }
 }
 
@@ -1324,7 +1354,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                         // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
                                         let ball_size_val = *BALL_SIZE.lock().unwrap();
                                         let full_size = ball_size_val + BALL_PADDING * 2;
-                                        apply_circular_window_mask(w, full_size);
+                                        apply_circular_window_mask(w, full_size, "menu_show_main");
                                     }
                                 }
                                 "hide_main_window" => {
@@ -1794,7 +1824,7 @@ fn handle_login_success(app: &tauri::AppHandle) {
             // Windows 上 SetWindowRgn 在窗口隐藏后重新显示时可能失效，重新应用圆形遮罩
             let ball_size_val = *BALL_SIZE.lock().unwrap();
             let full_size = ball_size_val + BALL_PADDING * 2;
-            apply_circular_window_mask(&main_window_clone, full_size);
+            apply_circular_window_mask(&main_window_clone, full_size, "login_success");
             log_msg("handle_login_success: main 窗口已显示，BALL_VISIBLE=true");
 
             if !js_inject.is_empty() {
@@ -1926,7 +1956,7 @@ fn show_menu(app: tauri::AppHandle) {
                         if let Some(main_w) = app2.webview_windows().get("main") {
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                             let full_size = ball_size_val + BALL_PADDING * 2;
-                            apply_circular_window_mask(&main_w, full_size);
+                            apply_circular_window_mask(&main_w, full_size, "menu_reuse");
                         }
                         let _ = w.show();
                         eprintln!("show_menu: 延迟600ms后显示菜单窗口（复用）");
@@ -1968,7 +1998,7 @@ fn show_menu(app: tauri::AppHandle) {
                     if let Some(main_w) = app_clone.webview_windows().get("main") {
                         let ball_size_val = *BALL_SIZE.lock().unwrap();
                         let full_size = ball_size_val + BALL_PADDING * 2;
-                        apply_circular_window_mask(&main_w, full_size);
+                        apply_circular_window_mask(&main_w, full_size, "after_menu_create");
                     }
                     let _ = w.show();
                     eprintln!("show_menu: 延迟600ms后显示菜单窗口（新建）");
@@ -2136,7 +2166,7 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
         }));
 
         // 设置窗口为圆形
-        apply_circular_window_mask(&main_window, full_size);
+        apply_circular_window_mask(&main_window, full_size, "update_size");
 
         // 同步更新内部状态
         let mut ball_size = BALL_SIZE.lock().unwrap();
@@ -2704,7 +2734,7 @@ pub fn run() {
                                             // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
                                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                                             let full_size = ball_size_val + BALL_PADDING * 2;
-                                            apply_circular_window_mask(w, full_size);
+                                            apply_circular_window_mask(w, full_size, "tray_init");
                                         }
                                     } else {
                                         log_msg("[Tray] 错误: 找不到 main 窗口");
@@ -2813,7 +2843,7 @@ pub fn run() {
                             y: initial_y,
                         }));
                         // 在正确尺寸和位置设置后应用圆形遮罩（必须在 set_size 之后）
-                        apply_circular_window_mask(&window, size);
+                        apply_circular_window_mask(&window, size, "init_position");
                     }
                     // show 触发 webview 初始化（App.vue 开始执行），
                     // 随即 hide 避免浮动球提前显示；
@@ -2836,7 +2866,7 @@ pub fn run() {
                                     if let Some(w) = app_clone.webview_windows().get("main") {
                                         let ball_size_val = *BALL_SIZE.lock().unwrap();
                                         let full_size = ball_size_val + BALL_PADDING * 2;
-                                        apply_circular_window_mask(&w, full_size);
+                                        apply_circular_window_mask(&w, full_size, "on_blur");
                                         log_msg("[on_blur] 已刷新悬浮球遮罩");
                                     }
                                 });
@@ -2872,7 +2902,7 @@ pub fn run() {
                             // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                             let full_size = ball_size_val + BALL_PADDING * 2;
-                            apply_circular_window_mask(window, full_size);
+                            apply_circular_window_mask(window, full_size, "shortcut_toggle");
                         }
                     }
                 }
