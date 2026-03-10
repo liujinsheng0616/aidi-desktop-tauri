@@ -359,11 +359,12 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
-                // 2. 强制设置 Tauri 初始窗口样式 0x4CB0000（确保始终无灰色背景）
-                const CORRECT_STYLE: i32 = 0x04CB0000;
+                // 2. 强制设置正确的窗口样式（包含 WS_VISIBLE 确保窗口可见）
+                // 0x14CB0000 = Tauri 初始样式 0x04CB0000 + WS_VISIBLE(0x10000000)
+                const CORRECT_STYLE: i32 = 0x14CB0000;
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
-                log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x04CB0000", caller, old_style));
+                log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x14CB0000", caller, old_style));
 
                 // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
