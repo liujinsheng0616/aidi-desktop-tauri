@@ -299,7 +299,6 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
         use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Graphics::Dwm::*;
         use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn, ClientToScreen};
-        use windows::Win32::UI::Controls::MARGINS;
         use std::ffi::c_void;
 
         if let Ok(hwnd) = window.hwnd() {
@@ -354,9 +353,9 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                     current_style
                 ));
 
-                // 1. 设置圆形窗口遮罩（使用实际物理尺寸）
+                // 1. 设置圆形窗口遮罩（bRedraw=false，避免立即触发 WM_NCPAINT）
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
-                let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
+                let rgn_result = SetWindowRgn(hwnd, Some(hrgn), windows::Win32::Foundation::BOOL(0));
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
                 // 2. 清除标题栏装饰相关样式位，保留其他原始位（避免破坏 DWM 内部状态）
@@ -372,27 +371,26 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
 
-                // 4. 强制刷新
-                let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-
-                // 5. DWM 透明
-                let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
-                let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-                // 6. 禁用系统背景
-                const DWMSBT_NONE: i32 = 1;
-                let backdrop_type: i32 = DWMSBT_NONE;
-                let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
-                    &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
-
-                // 7. 禁用 DWM 非客户区渲染（DWMWA_NCRENDERING_POLICY=2, DWMNCRP_DISABLED=1）
-                // 防止 focus/Z-order 变化时 DWM 在窗口顶部重绘标题栏区域，产生灰色半月形残影
+                // 4. 先禁用 DWM NC 渲染（必须在 SWP_FRAMECHANGED 之前，否则 FRAMECHANGED 触发的重绘会产生残影）
                 const DWMWA_NCRENDERING_POLICY_VAL: windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE =
                     windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(2);
                 const DWMNCRP_DISABLED: i32 = 1;
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY_VAL,
                     &DWMNCRP_DISABLED as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
+
+                // 5. 禁用系统背景（DWMSBT_NONE=1）
+                const DWMSBT_NONE: i32 = 1;
+                let backdrop_type: i32 = DWMSBT_NONE;
+                let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
+                    &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
+
+                // 6. 【不再调用 DwmExtendFrameIntoClientArea】
+                // margins={-1,-1,-1,-1} 会让 DWM 在 focus 变化时重绘整个玻璃帧边缘，绕过 DWMNCRP_DISABLED
+                // WebView2 通过 DirectComposition + DefaultBackgroundColor={A:0} 自行处理透明，不依赖此 API
+
+                // 7. 最后触发刷新（此时 DWMNCRP_DISABLED 已生效，不会产生 NC 重绘残影）
+                let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
                 log_msg(&format!("[apply_circular_window_mask] caller={} 完成", caller));
             }
