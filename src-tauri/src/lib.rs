@@ -437,7 +437,7 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
 
     if let Ok(hwnd) = window.hwnd() {
         let hwnd = HWND(hwnd.0);
-        result.push_str(&format!("HWND: {:?}\n", hwnd.0));
+        result.push_str(&format!("HWND: {}\n", hwnd.0));
 
         unsafe {
             // 1. 窗口样式
@@ -498,7 +498,8 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
 
             // 5. 窗口区域 (Region)
             let region_result = GetWindowRgn(hwnd, windows::Win32::Graphics::Gdi::HRGN::default());
-            result.push_str(&format!("Region result: {:?} (0=ERROR, 1=NULLREGION, 2=SIMPLEREGION, 3=COMPLEXREGION)\n", region_result));
+            let region_code = region_result.0;
+            result.push_str(&format!("Region result: {} (0=ERROR, 1=NULL, 2=SIMPLE, 3=COMPLEX)\n", region_code));
 
             // 6. DWM 扩展帧边界
             let mut bounds = windows::Win32::Foundation::RECT::default();
@@ -508,9 +509,10 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
                 &mut bounds as *mut _ as *mut c_void,
                 std::mem::size_of::<windows::Win32::Foundation::RECT>() as u32,
             );
+            let dwm_ok = dwm_result.is_ok();
             result.push_str(&format!(
-                "DWM ExtendedFrameBounds: ({}, {}) - ({}, {}) [result: {:?}]\n",
-                bounds.left, bounds.top, bounds.right, bounds.bottom, dwm_result
+                "DWM ExtendedFrameBounds: ({}, {}) - ({}, {}) [ok={}]\n",
+                bounds.left, bounds.top, bounds.right, bounds.bottom, dwm_ok
             ));
 
             // 计算与 WindowRect 的差异（表示非客户区大小）
@@ -531,9 +533,10 @@ fn diagnose_window_state(window: &tauri::WebviewWindow) -> String {
                 &mut backdrop_type as *mut i32 as *mut c_void,
                 std::mem::size_of::<i32>() as u32,
             );
+            let backdrop_ok = backdrop_result.is_ok();
             result.push_str(&format!(
-                "DWM SystemBackdropType: {} [result: {:?}] (1=NONE, 2=MICA, 3=ACRYLIC, 4=TABBED)\n",
-                backdrop_type, backdrop_result
+                "DWM SystemBackdropType: {} [ok={}] (1=NONE, 2=MICA, 3=ACRYLIC, 4=TABBED)\n",
+                backdrop_type, backdrop_ok
             ));
         }
     } else {
@@ -552,7 +555,10 @@ fn diagnose_window_state(_window: &tauri::WebviewWindow) -> String {
 /// Tauri 命令：诊断悬浮球窗口状态
 #[tauri::command]
 fn diagnose_window(window: tauri::WebviewWindow) -> String {
-    diagnose_window_state(&window)
+    let result = diagnose_window_state(&window);
+    // 同时输出到日志，方便在终端查看
+    log_msg(&format!("[diagnose_window]\n{}", result));
+    result
 }
 
 // Animate window to target position with easing
