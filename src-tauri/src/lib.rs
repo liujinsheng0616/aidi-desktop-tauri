@@ -369,11 +369,11 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 // - WS_CLIPCHILDREN (0x02000000) - 裁剪子窗口
                 // - WS_VISIBLE (0x10000000) - 可见
                 // 注意：不包含 WS_BORDER、WS_DLGFRAME、WS_CAPTION 等边框样式
-                const CORRECT_STYLE: i32 =
-                    0x80000000 |  // WS_POPUP
-                    0x04000000 |  // WS_CLIPSIBLINGS
-                    0x02000000 |  // WS_CLIPCHILDREN
-                    0x10000000;   // WS_VISIBLE
+                // 使用 u32 计算后转换为 i32（0x80000000 超出 i32 正数范围）
+                const CORRECT_STYLE: i32 = (0x80000000u32   // WS_POPUP
+                    | 0x04000000u32   // WS_CLIPSIBLINGS
+                    | 0x02000000u32   // WS_CLIPCHILDREN
+                    | 0x10000000u32) as i32;  // WS_VISIBLE = 0x96000000
 
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
