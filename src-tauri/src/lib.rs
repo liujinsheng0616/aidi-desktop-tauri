@@ -386,6 +386,14 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
 
+                // 7. 禁用 DWM 非客户区渲染（DWMWA_NCRENDERING_POLICY=2, DWMNCRP_DISABLED=1）
+                // 防止 focus/Z-order 变化时 DWM 在窗口顶部重绘标题栏区域，产生灰色半月形残影
+                const DWMWA_NCRENDERING_POLICY_VAL: windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE =
+                    windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(2);
+                const DWMNCRP_DISABLED: i32 = 1;
+                let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY_VAL,
+                    &DWMNCRP_DISABLED as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
+
                 log_msg(&format!("[apply_circular_window_mask] caller={} 完成", caller));
             }
         }
