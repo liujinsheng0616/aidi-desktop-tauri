@@ -359,30 +359,39 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
-                // 2. 移除 WS_CAPTION 样式位，消除 Windows 11 标题栏热区
+                // 2. 强制设置正确的窗口样式（不再依赖增量修改）
+                // 诊断发现：Windows 在某些操作后会自动修改窗口样式，导致灰色背景
+                // 解决方案：强制设置一个经过验证的正确样式，不依赖旧值
+                //
+                // 正确样式组成：
+                // - WS_POPUP (0x80000000) - 无边框弹出窗口
+                // - WS_CLIPSIBLINGS (0x04000000) - 裁剪兄弟窗口
+                // - WS_CLIPCHILDREN (0x02000000) - 裁剪子窗口
+                // - WS_VISIBLE (0x10000000) - 可见
+                // 注意：不包含 WS_BORDER、WS_DLGFRAME、WS_CAPTION 等边框样式
+                const CORRECT_STYLE: i32 =
+                    0x80000000 |  // WS_POPUP
+                    0x04000000 |  // WS_CLIPSIBLINGS
+                    0x02000000 |  // WS_CLIPCHILDREN
+                    0x10000000;   // WS_VISIBLE
+
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
-                let new_style = old_style & !(WS_CAPTION.0 as i32);
-                SetWindowLongW(hwnd, GWL_STYLE, new_style);
-                log_msg(&format!("[apply_circular_window_mask] caller={} WS_CAPTION: old_style=0x{:X} new_style=0x{:X}", caller, old_style, new_style));
+                SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
+                log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x{:X}", caller, old_style, CORRECT_STYLE));
 
                 // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
 
-                // 4. 移除边框样式
-                let style = GetWindowLongW(hwnd, GWL_STYLE);
-                let new_style = (style & !0x00CC_0000) | (WS_CLIPCHILDREN.0 as i32);
-                SetWindowLongW(hwnd, GWL_STYLE, new_style);
-
-                // 5. 强制刷新
+                // 4. 强制刷新
                 let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-                // 6. DWM 透明
+                // 5. DWM 透明
                 let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
                 let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-                // 7. 禁用系统背景
+                // 6. 禁用系统背景
                 const DWMSBT_NONE: i32 = 1;
                 let backdrop_type: i32 = DWMSBT_NONE;
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
