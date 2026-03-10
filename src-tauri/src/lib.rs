@@ -295,7 +295,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Graphics::Dwm::*;
-        use windows::Win32::Graphics::Gdi::CreateEllipticRgn;
+        use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn};
         use windows::Win32::UI::Controls::MARGINS;
         use std::ffi::c_void;
 
