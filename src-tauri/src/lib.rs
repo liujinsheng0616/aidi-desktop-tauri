@@ -359,12 +359,19 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 let rgn_result = SetWindowRgn(hwnd, Some(hrgn), true);
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
-                // 2. 强制设置正确的窗口样式（包含 WS_VISIBLE 确保窗口可见）
-                // 0x14CB0000 = Tauri 初始样式 0x04CB0000 + WS_VISIBLE(0x10000000)
-                const CORRECT_STYLE: i32 = 0x14CB0000;
+                // 2. 强制设置正确的窗口样式，不依赖旧值
+                // WS_POPUP (0x80000000) - 无边框窗口
+                // WS_CLIPSIBLINGS (0x04000000) - 裁剪兄弟窗口
+                // WS_CLIPCHILDREN (0x02000000) - 裁剪子窗口
+                // WS_VISIBLE (0x10000000) - 可见
+                const CORRECT_STYLE: i32 =
+                    0x80000000 |  // WS_POPUP
+                    0x04000000 |  // WS_CLIPSIBLINGS
+                    0x02000000 |  // WS_CLIPCHILDREN
+                    0x10000000;   // WS_VISIBLE
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
-                log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x14CB0000", caller, old_style));
+                log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x{:X}", caller, old_style, CORRECT_STYLE));
 
                 // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
