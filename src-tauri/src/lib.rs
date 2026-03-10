@@ -290,44 +290,57 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32) {
 
     #[cfg(windows)]
     {
-        // 简化版：只设置透明和边框，不再设置圆形遮罩
-        // 圆形效果由前端 CSS 实现，解决 SetWindowRgn 与 Windows DWM 交互导致的灰色背景问题
+        // 使用 SetWindowRgn 让窗口本身变圆，这是 Windows 上实现圆形窗口的可靠方案
+        // 同时移除 WS_CAPTION 消除 Windows 11 标题栏热区（Snap Layout 控件）
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Graphics::Dwm::*;
+        use windows::Win32::Graphics::Gdi::CreateEllipticRgn;
         use windows::Win32::UI::Controls::MARGINS;
         use std::ffi::c_void;
 
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
 
-            log_msg(&format!("[apply_circular_window_mask] 开始（简化版，无 SetWindowRgn） size={}", size));
+            // 获取 DPI 缩放因子，将逻辑像素转换为物理像素
+            let scale_factor = window.scale_factor().unwrap_or(1.0);
+            let phys_size = (size as f64 * scale_factor) as i32;
+
+            log_msg(&format!("[apply_circular_window_mask] 开始 size={} phys_size={} scale={}", size, phys_size, scale_factor));
 
             unsafe {
-                // 1. 添加 WS_EX_LAYERED
+                // 1. 设置圆形窗口遮罩（关键：让窗口本身变圆，消除灰色背景）
+                let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
+                SetWindowRgn(hwnd, Some(hrgn), true);
+
+                // 2. 移除 WS_CAPTION 样式位，彻底消除 Windows 11 标题栏热区
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_CAPTION.0 as i32));
+
+                // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
 
-                // 2. 移除边框样式
+                // 4. 移除边框样式
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 let new_style = (style & !0x00CC_0000) | (WS_CLIPCHILDREN.0 as i32);
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
 
-                // 3. 强制刷新
+                // 5. 强制刷新
                 let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-                // 4. DWM 透明
+                // 6. DWM 透明
                 let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
                 let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-                // 5. 禁用系统背景
+                // 7. 禁用系统背景
                 const DWMSBT_NONE: i32 = 1;
                 let backdrop_type: i32 = DWMSBT_NONE;
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
 
-                log_msg("[apply_circular_window_mask] 完成（简化版）");
+                log_msg("[apply_circular_window_mask] 完成（使用 SetWindowRgn）");
             }
         }
     }
