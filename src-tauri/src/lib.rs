@@ -365,7 +365,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 // WS_CLIPCHILDREN (0x02000000) - 裁剪子窗口
                 // WS_VISIBLE (0x10000000) - 可见
                 const CORRECT_STYLE: i32 =
-                    0x80000000 |  // WS_POPUP
+                    0x80000000u32 as i32 |  // WS_POPUP
                     0x04000000 |  // WS_CLIPSIBLINGS
                     0x02000000 |  // WS_CLIPCHILDREN
                     0x10000000;   // WS_VISIBLE
