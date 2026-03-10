@@ -360,13 +360,12 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
                 // 2. 强制设置正确的窗口样式
-                // 移除所有标题栏相关样式，只保留基本样式
-                // WS_VISIBLE (0x10000000) - 窗口可见
-                // WS_CLIPSIBLINGS (0x04000000) - 裁剪兄弟窗口
-                // WS_CLIPCHILDREN (0x02000000) - 裁剪子窗口
-                // 总计 = 0x16000000
-                // 此样式：无边框、无标题栏按钮、无灰色背景
-                const CORRECT_STYLE: i32 = 0x16000000;
+                // 使用 V2 验证过的样式：0x14CB0000
+                // WS_VISIBLE (0x10000000) | WS_CLIPSIBLINGS (0x04000000)
+                // | WS_BORDER (0x00800000) | WS_DLGFRAME (0x00400000)
+                // | WS_SYSMENU (0x00080000) | WS_MINIMIZEBOX (0x00020000) | WS_MAXIMIZEBOX (0x00010000)
+                // 此样式经过验证：拖动后无灰色背景
+                const CORRECT_STYLE: i32 = 0x14CB0000u32 as i32;
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 SetWindowLongW(hwnd, GWL_STYLE, CORRECT_STYLE);
                 log_msg(&format!("[apply_circular_window_mask] caller={} Style: old=0x{:X} -> 强制设置=0x{:X}", caller, old_style, CORRECT_STYLE));
@@ -1089,6 +1088,21 @@ fn drag_end(app: tauri::AppHandle) {
     let Some(main_window) = windows.get("main") else {
         return;
     };
+
+    // 新增：Windows 打印拖动结束时的窗口样式，用于诊断灰色背景
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_STYLE};
+        if let Ok(raw_hwnd) = main_window.hwnd() {
+            let hwnd = HWND(raw_hwnd.0 as isize);
+            unsafe {
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                log_msg(&format!("[drag_end] 拖动结束时窗口样式=0x{:X}", style));
+            }
+        }
+    }
+
     let Ok(pos) = main_window.outer_position() else {
         return;
     };
