@@ -355,7 +355,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
 
                 // 1. 设置圆形窗口遮罩（bRedraw=false，避免立即触发 WM_NCPAINT）
                 let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
-                let rgn_result = SetWindowRgn(hwnd, Some(hrgn), windows::Win32::Foundation::BOOL(0));
+                let rgn_result = SetWindowRgn(hwnd, Some(hrgn), false);
                 log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
 
                 // 2. 清除标题栏装饰相关样式位，保留其他原始位（避免破坏 DWM 内部状态）
