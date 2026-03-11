@@ -103,6 +103,10 @@ static IS_LOGGED_IN: AtomicBool = AtomicBool::new(false);
 /// 浮动球预期可见状态（不依赖 is_visible() API，避免 macOS 平台问题）
 static BALL_VISIBLE: AtomicBool = AtomicBool::new(false);
 
+/// Windows 专用：WM_NCCALCSIZE 子类化是否已注册（只注册一次）
+#[cfg(target_os = "windows")]
+static SUBCLASS_INSTALLED: AtomicBool = AtomicBool::new(false);
+
 // ==================== DATA STRUCTURES ====================
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -267,6 +271,28 @@ fn ease_out_cubic(t: f32) -> f32 {
     1.0 - t_inv * t_inv * t_inv
 }
 
+/// Windows 专用：WndProc 子类化回调，拦截 WM_NCCALCSIZE 将非客户区归零
+/// 这是从协议层彻底消除标题栏热区的标准方案（Chromium/Electron 同款）
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn ball_window_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _uid_subclass: usize,
+    _ref_data: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::WM_NCCALCSIZE;
+    use windows::Win32::UI::Controls::DefSubclassProc;
+
+    if msg == WM_NCCALCSIZE && wparam.0 != 0 {
+        // 强制非客户区大小为零，系统不再分配标题栏/边框区域
+        // 返回 0 时 Windows 会将整个窗口矩形用作客户区
+        return windows::Win32::Foundation::LRESULT(0);
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
+}
+
 /// 设置窗口为圆形
 /// caller: 调用来源标识，用于诊断日志对比（如 "init", "on_blur", "after_menu", "show"）
 fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: &str) {
@@ -391,6 +417,19 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 // 7. 最后触发刷新（此时 DWMNCRP_DISABLED 已生效，不会产生 NC 重绘残影）
                 let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+                // 8. WndProc 子类化：拦截 WM_NCCALCSIZE，从协议层彻底消除 NC 区域
+                // 只需注册一次，后续系统事件不会再恢复标题栏热区
+                if !SUBCLASS_INSTALLED.load(Ordering::Relaxed) {
+                    use windows::Win32::UI::Controls::SetWindowSubclass;
+                    let ok = SetWindowSubclass(hwnd, Some(ball_window_proc), 1, 0);
+                    if ok.as_bool() {
+                        SUBCLASS_INSTALLED.store(true, Ordering::Relaxed);
+                        log_msg(&format!("[apply_circular_window_mask] caller={} WM_NCCALCSIZE 子类化注册成功", caller));
+                    } else {
+                        log_msg(&format!("[apply_circular_window_mask] caller={} WM_NCCALCSIZE 子类化注册失败", caller));
+                    }
+                }
 
                 log_msg(&format!("[apply_circular_window_mask] caller={} 完成", caller));
             }
@@ -1307,31 +1346,6 @@ fn get_window_position(window: tauri::Window) -> (i32, i32) {
     } else {
         (0, 0)
     }
-}
-
-fn create_main_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
-    log_msg("[create_main_window] 开始动态创建浮动球窗口...");
-    let main_url = tauri::WebviewUrl::App("index.html".into());
-
-    let builder = tauri::WebviewWindowBuilder::new(app, "main", main_url)
-        .title("")
-        .inner_size(120.0, 120.0)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .visible(false)
-        .accept_first_mouse(true)
-        .devtools(true);
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.hidden_title(true);
-
-    let main_window = builder.build()?;
-    log_msg("[create_main_window] 浮动球窗口创建成功");
-    Ok(main_window)
 }
 
 fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::WebviewWindow, tauri::Error> {
@@ -2859,8 +2873,7 @@ pub fn run() {
                         _ => {}
                     });
 
-                // 动态创建浮动球窗口（已从 tauri.conf.json 静态声明改为代码创建）
-                let _ = create_main_window(app.handle());
+                // Position main window at center
                 if let Some(window) = app.webview_windows().get("main") {
                     // 禁用窗口阴影，避免灰色边框
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
