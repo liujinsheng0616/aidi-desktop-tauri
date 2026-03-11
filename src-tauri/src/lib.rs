@@ -3038,6 +3038,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            // RunEvent::Reopen 仅在 macOS 存在（Dock 图标点击事件）
+            #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
                 if !has_visible_windows {
                     log_msg("RunEvent::Reopen: Dock 图标点击，无可见窗口");
@@ -3078,5 +3080,7 @@ pub fn run() {
                     }
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
         });
 }
