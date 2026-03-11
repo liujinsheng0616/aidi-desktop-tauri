@@ -1789,45 +1789,6 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
     Ok(result)
 }
 
-/// 尝试从 auth.json 恢复登录状态（适用于 Windows localStorage 不持久的场景）
-/// 返回 true 表示恢复成功，false 表示 auth.json 不存在或 token 为空
-fn try_restore_auth_from_file(app: &tauri::AppHandle) -> bool {
-    let auth_path = match dirs::data_local_dir() {
-        Some(d) => d.join("AIDI Desktop").join("auth.json"),
-        None => {
-            log_msg("try_restore_auth: 无法获取 data_local_dir");
-            return false;
-        }
-    };
-    if !auth_path.exists() {
-        log_msg("try_restore_auth: auth.json 不存在");
-        return false;
-    }
-    let content = match std::fs::read_to_string(&auth_path) {
-        Ok(c) => c,
-        Err(e) => {
-            log_msg(&format!("try_restore_auth: auth.json 读取失败: {:?}", e));
-            return false;
-        }
-    };
-    let val: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            log_msg(&format!("try_restore_auth: auth.json 解析失败: {:?}", e));
-            return false;
-        }
-    };
-    let token = val["token"].as_str().unwrap_or("");
-    if token.is_empty() {
-        log_msg("try_restore_auth: token 为空");
-        return false;
-    }
-    log_msg(&format!("try_restore_auth: 找到有效 auth.json (token前10字符={})，触发登录成功流程",
-        &token[..token.len().min(10)]));
-    handle_login_success(app);
-    true
-}
-
 /// 登录成功后的处理逻辑（从 on_login_success 抽取出来供 on_navigation 调用）
 fn handle_login_success(app: &tauri::AppHandle) {
     log_msg("handle_login_success: 开始处理登录成功");
@@ -2884,6 +2845,25 @@ pub fn run() {
                         _ => {}
                     });
 
+                // 提前从 auth.json 读取登录状态
+                // 使 IS_LOGGED_IN 在前端 WebView 加载之前就已正确设置
+                {
+                    let has_valid_token = dirs::data_local_dir()
+                        .map(|d| d.join("AIDI Desktop").join("auth.json"))
+                        .and_then(|p| std::fs::read_to_string(p).ok())
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .map(|v| !v["token"].as_str().unwrap_or("").is_empty())
+                        .unwrap_or(false);
+
+                    if has_valid_token {
+                        IS_LOGGED_IN.store(true, Ordering::SeqCst);
+                        log_msg("setup: auth.json 有有效 token，提前设置 IS_LOGGED_IN=true");
+                        rebuild_tray_menu(&app.handle(), true, false);
+                    } else {
+                        log_msg("setup: auth.json 无有效 token，保持未登录状态");
+                    }
+                }
+
                 // Position main window at center
                 if let Some(window) = app.webview_windows().get("main") {
                     // 禁用窗口阴影，避免灰色边框
@@ -3000,79 +2980,6 @@ pub fn run() {
                 log_msg("错误: main 窗口未找到！");
             }
 
-            // 超时机制：如果前端 5 秒内没有调用 update_login_status，自动处理
-            // 这处理了 Windows 上 main 窗口 visible=false 导致 WebView 不加载的问题
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                // 第一阶段：3秒后检查，若前端仍未响应则发事件提醒重新检查登录状态
-                std::thread::sleep(Duration::from_secs(3));
-                if IS_LOGGED_IN.load(Ordering::SeqCst) {
-                    return; // 前端已响应，正常退出
-                }
-                log_msg("超时线程: 前端 3 秒内未响应，发送 request-login-check 事件");
-                if let Some(main_win) = app_handle.webview_windows().get("main") {
-                    let _ = main_win.emit("request-login-check", ());
-                }
-                // 第二阶段：再等 2 秒（共 5 秒），若仍未响应则走 auth.json 兜底
-                std::thread::sleep(Duration::from_secs(2));
-                if !IS_LOGGED_IN.load(Ordering::SeqCst) {
-                    log_msg("前端 5 秒内未响应，尝试从 auth.json 恢复登录状态");
-                    // 先尝试从 auth.json 恢复（适用于 Windows localStorage 不持久的场景）
-                    if try_restore_auth_from_file(&app_handle) {
-                        log_msg("auth.json 恢复成功，跳过登录窗口");
-                        return;
-                    }
-                    log_msg("auth.json 无有效 token，显示登录窗口");
-                    if let Some(w) = app_handle.webview_windows().get("login") {
-                        log_msg(&format!("login 窗口已存在, 可见性: {}, 位置: {:?}, 大小: {:?}",
-                            w.is_visible().unwrap_or(false),
-                            w.outer_position().ok(),
-                            w.outer_size().ok()));
-                        let _ = w.center();
-                        let _ = w.show();
-                        #[cfg(target_os = "windows")]
-                        {
-                            use tauri::{LogicalSize, Size};
-                            let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
-                            let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
-                        }
-                        let _ = w.set_focus();
-                        log_msg(&format!("login 窗口显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
-                            w.is_visible().unwrap_or(false),
-                            w.outer_position().ok(),
-                            w.outer_size().ok()));
-                    } else {
-                        // login 窗口不存在，动态创建
-                        log_msg("login 窗口不存在，动态创建...");
-                        match create_login_window(&app_handle) {
-                            Ok(w) => {
-                                log_msg(&format!("login 窗口创建成功, 可见性: {}, 位置: {:?}, 大小: {:?}",
-                                    w.is_visible().unwrap_or(false),
-                                    w.outer_position().ok(),
-                                    w.outer_size().ok()));
-                                // Windows 上先居中再显示
-                                let _ = w.center();
-                                #[cfg(target_os = "windows")]
-                                {
-                                    use tauri::{LogicalSize, Size};
-                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 361.0, height: 421.0 }));
-                                    let _ = w.set_size(Size::Logical(LogicalSize { width: 360.0, height: 420.0 }));
-                                }
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                                log_msg(&format!("login 窗口显示后, 可见性: {}, 位置: {:?}, 大小: {:?}",
-                                    w.is_visible().unwrap_or(false),
-                                    w.outer_position().ok(),
-                                    w.outer_size().ok()));
-                            }
-                            Err(e) => {
-                                log_msg(&format!("创建 login 窗口失败: {:?}", e));
-                            }
-                        }
-                    }
-                }
-            });
-
             // 启动守护线程
             report_worker::start_report_worker(app.handle().clone());
 
@@ -3128,6 +3035,48 @@ pub fn run() {
             save_login_info,
             diagnose_window,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    log_msg("RunEvent::Reopen: Dock 图标点击，无可见窗口");
+                    let is_logged_in = IS_LOGGED_IN.load(Ordering::SeqCst);
+                    if is_logged_in {
+                        if let Some(main_window) = app.webview_windows().get("main") {
+                            let _ = main_window.show();
+                            BALL_VISIBLE.store(true, Ordering::SeqCst);
+                            let ball_size_val = *BALL_SIZE.lock().unwrap();
+                            let full_size = ball_size_val + BALL_PADDING * 2;
+                            apply_circular_window_mask(&main_window, full_size, "reopen");
+                            rebuild_tray_menu(app, true, true);
+                            log_msg("RunEvent::Reopen: 悬浮球已显示");
+                        }
+                    } else {
+                        log_msg("RunEvent::Reopen: 未登录，显示登录窗口");
+                        if let Some(w) = app.webview_windows().get("login") {
+                            let login_url = build_login_url(app);
+                            let _ = w.navigate(tauri::Url::parse(&login_url).unwrap());
+                            let _ = w.center();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        } else {
+                            let app_clone = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                match create_login_window(&app_clone) {
+                                    Ok(w) => {
+                                        let _ = w.center();
+                                        let _ = w.show();
+                                        let _ = w.set_focus();
+                                    }
+                                    Err(e) => {
+                                        log_msg(&format!("RunEvent::Reopen: 创建登录窗口失败: {:?}", e));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        });
 }
