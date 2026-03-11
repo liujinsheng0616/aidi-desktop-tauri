@@ -309,7 +309,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
             let calculated_phys_size = (size as f64 * scale_factor) as i32;
 
             // 关键修复：获取窗口实际的物理尺寸，而不是手动计算
-            let (phys_size, outer_width, outer_height) = if let Ok(outer_size) = window.outer_size() {
+            let (phys_size, _outer_width, _outer_height) = if let Ok(outer_size) = window.outer_size() {
                 // outer_size 返回 PhysicalSize，直接使用
                 let w = outer_size.width as i32;
                 let h = outer_size.height as i32;
