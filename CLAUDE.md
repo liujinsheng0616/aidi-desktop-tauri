@@ -126,6 +126,44 @@ aidi-desktop-tauri/
         └── system-info.sh
 ```
 
+## 踩坑记录
+
+### Windows 浮动球：失焦后顶部出现灰色半圆弧
+
+**现象**：点击浮动球外部区域（窗口失焦）后，球的顶部出现一块灰色半圆弧残影；拖动后消失。
+
+**根因**：DWM（桌面窗口管理器）在窗口焦点切换时会触发 NC（非客户区）重绘：
+- `WM_NCACTIVATE`：窗口激活状态变化时，DWM 重绘 NC 标题区 → 出现灰色
+- `WM_NCPAINT`：NC 区域脏标记触发重绘 → 灰色残留
+- `ball_window_proc` 只拦截了 `WM_NCCALCSIZE`，这两个消息未处理，走 `DefSubclassProc` 会触发默认 NC 绘制
+
+**解决方案**：在 `ball_window_proc` 中追加对这两条消息的拦截，阻止 DWM 绘制任何 NC 内容。
+
+```rust
+// src-tauri/src/lib.rs - ball_window_proc()
+use windows::Win32::UI::WindowsAndMessaging::{WM_NCCALCSIZE, WM_NCACTIVATE, WM_NCPAINT};
+
+// ... WM_NCCALCSIZE 处理保持不变 ...
+
+// 拦截 NC 激活重绘：返回 TRUE(1) 阻止 DWM 绘制灰色标题栏
+if msg == WM_NCACTIVATE {
+    return windows::Win32::Foundation::LRESULT(1);
+}
+
+// 拦截 NC 绘制：直接吞掉，不绘制任何 NC 内容
+if msg == WM_NCPAINT {
+    return windows::Win32::Foundation::LRESULT(0);
+}
+```
+
+**原理**：
+- `WM_NCACTIVATE` 返回 `1`（TRUE）= 告诉系统"已处理激活状态变化"，DWM 不再重绘 NC 区域
+- `WM_NCPAINT` 返回 `0` = 告诉系统"NC 区域无需绘制"，跳过整个 NC 绘制流程
+
+**注意**：无需修改 `Cargo.toml`，`Win32_UI_WindowsAndMessaging` feature 已包含这两个消息常量。
+
+---
+
 ## 关键技术细节
 
 - **端口 1420** 在 `vite.config.ts` 中硬编码，Tauri 的 `devUrl` 必须使用此端口
