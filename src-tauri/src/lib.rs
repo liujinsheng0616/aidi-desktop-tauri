@@ -282,7 +282,7 @@ unsafe extern "system" fn ball_window_proc(
     _uid_subclass: usize,
     _ref_data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::UI::WindowsAndMessaging::WM_NCCALCSIZE;
+    use windows::Win32::UI::WindowsAndMessaging::{WM_NCCALCSIZE, WM_NCACTIVATE, WM_NCPAINT};
     use windows::Win32::UI::Shell::DefSubclassProc;
 
     if msg == WM_NCCALCSIZE && wparam.0 != 0 {
@@ -290,6 +290,17 @@ unsafe extern "system" fn ball_window_proc(
         // 返回 0 时 Windows 会将整个窗口矩形用作客户区
         return windows::Win32::Foundation::LRESULT(0);
     }
+
+    // 拦截 NC 激活重绘：返回 TRUE(1) 阻止 DWM 绘制灰色标题栏
+    if msg == WM_NCACTIVATE {
+        return windows::Win32::Foundation::LRESULT(1);
+    }
+
+    // 拦截 NC 绘制：直接吞掉，不绘制任何 NC 内容
+    if msg == WM_NCPAINT {
+        return windows::Win32::Foundation::LRESULT(0);
+    }
+
     DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
