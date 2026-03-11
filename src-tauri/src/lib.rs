@@ -1309,6 +1309,31 @@ fn get_window_position(window: tauri::Window) -> (i32, i32) {
     }
 }
 
+fn create_main_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
+    log_msg("[create_main_window] 开始动态创建浮动球窗口...");
+    let main_url = tauri::WebviewUrl::App("index.html".into());
+
+    let builder = tauri::WebviewWindowBuilder::new(app, "main", main_url)
+        .title("")
+        .inner_size(120.0, 120.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(false)
+        .accept_first_mouse(true)
+        .devtools(true);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.hidden_title(true);
+
+    let main_window = builder.build()?;
+    log_msg("[create_main_window] 浮动球窗口创建成功");
+    Ok(main_window)
+}
+
 fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::WebviewWindow, tauri::Error> {
     let app_handle = app.clone();
     let menu_url_str = build_menu_url(app, direction);
@@ -2834,7 +2859,8 @@ pub fn run() {
                         _ => {}
                     });
 
-                // Position main window at center
+                // 动态创建浮动球窗口（已从 tauri.conf.json 静态声明改为代码创建）
+                let _ = create_main_window(app.handle());
                 if let Some(window) = app.webview_windows().get("main") {
                     // 禁用窗口阴影，避免灰色边框
                     #[cfg(any(target_os = "macos", target_os = "windows"))]

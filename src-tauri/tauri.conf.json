@@ -12,27 +12,6 @@
   "app": {
     "windows": [
       {
-        "label": "main",
-        "title": "",
-        "url": "index.html",
-        "width": 120,
-        "height": 120,
-        "decorations": false,
-        "hiddenTitle": true,
-        "transparent": true,
-        "backgroundColor": "#00000000",
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "center": false,
-        "visible": false,
-        "x": 100,
-        "y": 100,
-        "acceptFirstMouse": true,
-        "devtools": true
-      },
-      {
         "label": "optimizer",
         "title": "系统优化",
         "url": "optimizer.html",
