@@ -283,7 +283,7 @@ unsafe extern "system" fn ball_window_proc(
     _ref_data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::WM_NCCALCSIZE;
-    use windows::Win32::UI::Controls::DefSubclassProc;
+    use windows::Win32::UI::Shell::DefSubclassProc;
 
     if msg == WM_NCCALCSIZE && wparam.0 != 0 {
         // 强制非客户区大小为零，系统不再分配标题栏/边框区域
@@ -421,7 +421,7 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
                 // 8. WndProc 子类化：拦截 WM_NCCALCSIZE，从协议层彻底消除 NC 区域
                 // 只需注册一次，后续系统事件不会再恢复标题栏热区
                 if !SUBCLASS_INSTALLED.load(Ordering::Relaxed) {
-                    use windows::Win32::UI::Controls::SetWindowSubclass;
+                    use windows::Win32::UI::Shell::SetWindowSubclass;
                     let ok = SetWindowSubclass(hwnd, Some(ball_window_proc), 1, 0);
                     if ok.as_bool() {
                         SUBCLASS_INSTALLED.store(true, Ordering::Relaxed);
