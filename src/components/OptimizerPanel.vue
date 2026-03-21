@@ -123,7 +123,6 @@ async function handleQuickOptimize() {
     // Now rescan
     await scanAll()
   } catch (e) {
-    console.error('Quick optimize failed:', e)
     showToast('优化失败，请重试')
   } finally {
     isQuickOptimizing.value = false

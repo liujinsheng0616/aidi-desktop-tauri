@@ -13,6 +13,7 @@
     "tauri": "tauri",
     "pre-dev": "node pre-dev.js ${AIDI_ENV:-test}",
     "tauri:dev": "AIDI_ENV=${AIDI_ENV:-test} node pre-dev.js ${AIDI_ENV:-test} && AIDI_ENV=${AIDI_ENV:-test} tauri dev",
+    "tauri:dev:local": "AIDI_ENV=development node pre-dev.js development && AIDI_ENV=development tauri dev",
     "tauri:test": "AIDI_ENV=test node pre-dev.js test && tauri dev",
     "tauri:prod": "AIDI_ENV=production node pre-dev.js production && tauri dev",
     "tauri:build": "tauri build",

@@ -33,7 +33,6 @@ function hideSubmenu() {
 
 function onOptimizerClick(event: MouseEvent) {
   event.stopPropagation()
-  console.log('Optimizer clicked!')
   // 直接显示优化器窗口
   invoke('show_optimizer_window')
   // 隐藏菜单（使用 hide_menu 而不是 hide_menu_window，保持状态一致）

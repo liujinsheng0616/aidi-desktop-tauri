@@ -95,6 +95,44 @@ fn log_msg(msg: &str) {
     }
 }
 
+/// 确保悬浮球窗口在聊天窗口之上
+fn ensure_ball_above_chat(app: &tauri::AppHandle) {
+    let windows = app.webview_windows();
+    let Some(main_window) = windows.get("main") else { return };
+    let Some(chat_window) = windows.get("chat") else { return };
+
+    // 确保两个窗口都可见
+    if let Ok(true) = chat_window.is_visible() {
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::SetWindowPos;
+            use windows::Win32::UI::WindowsAndMessaging::{SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE};
+            use windows::Win32::Foundation::HWND;
+
+            if let (Ok(main_hwnd), Ok(chat_hwnd)) = (
+                main_window.hwnd(),
+                chat_window.hwnd()
+            ) {
+                // 将聊天窗口放在悬浮球之后
+                let _ = SetWindowPos(
+                    HWND(chat_hwnd.0),
+                    Some(HWND(main_hwnd.0)),
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                );
+                log_msg("[ensure_ball_above_chat] Windows: 已调整 z-order");
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS: 悬浮球窗口调用 set_focus() 可以将它带到前面
+            let _ = main_window.set_focus();
+            log_msg("[ensure_ball_above_chat] macOS: 已设置焦点");
+        }
+    }
+}
+
 // ==================== GLOBAL LOGIN STATUS ====================
 
 /// 全局登录状态（用于动态切换托盘菜单）
@@ -146,7 +184,17 @@ fn get_external_url_base(_app: &AppHandle) -> String {
 /// 注意：Vue Router 使用 Hash 模式，所以路径需要加 # 前缀
 fn build_menu_url(app: &AppHandle, direction: &str) -> String {
     let base_url = get_external_url_base(app);
-    format!("{}/#/menu?direction={}", base_url, direction)
+    let theme_mode = {
+        let tm = THEME_MODE.lock().unwrap();
+        tm.clone()
+    };
+    // 只有 THEME_MODE 被显式设置过（用户切换过主题）才带参数；
+    // 为空时不带，让前端回落到 localStorage，避免覆盖重启后的持久化设置
+    if theme_mode.is_empty() {
+        format!("{}/#/menu?direction={}", base_url, direction)
+    } else {
+        format!("{}/#/menu?direction={}&themeMode={}", base_url, direction, theme_mode)
+    }
 }
 
 /// 构建登录页面的完整 URL
@@ -187,8 +235,6 @@ struct DockState {
     hidden_y: i32,
     pop_out_x: i32,
     pop_out_y: i32,
-    window_width: u32,
-    window_height: u32,
     // Interaction state machine
     interaction_state: InteractionState,
     // 弹出保护状态
@@ -221,8 +267,6 @@ static DOCK_STATE: Mutex<DockState> = Mutex::new(DockState {
     hidden_y: 0,
     pop_out_x: 0,
     pop_out_y: 0,
-    window_width: 0,
-    window_height: 0,
     interaction_state: InteractionState::Idle,
     is_in_pop_protection: false,
     ball_hover: false,
@@ -237,9 +281,8 @@ static HIDE_DOCK_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(
 static POP_PROTECTION_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 
 static BALL_SIZE: Mutex<u32> = Mutex::new(60);
-const BALL_PADDING: u32 = 12; // 外环需要 ballSize + 24，窗口尺寸 = ballSize + BALL_PADDING * 2，防止光晕被截断
-const EDGE_THRESHOLD: i32 = 15; // Edge detection threshold (reduced for better UX)
-const DOCK_VISIBLE_AMOUNT: i32 = 35; // Fixed visible amount when docked (pixels)
+static THEME_MODE: Mutex<String> = Mutex::new(String::new());
+const BALL_PADDING: u32 = 6; // 窗口尺寸 = ballSize + BALL_PADDING * 2，增加 6px 上下边距
 
 // Animation constants
 const ANIMATION_FRAMES: u32 = 12;
@@ -258,12 +301,6 @@ const HIDE_DELAY_MS: u64 = 300;
 const MENU_HIDE_DELAY_MS: u64 = 300;
 #[cfg(not(target_os = "windows"))]
 const MENU_HIDE_DELAY_MS: u64 = 80;
-
-// macOS menu bar height
-#[cfg(target_os = "macos")]
-const MENUBAR_HEIGHT: i32 = 25;
-#[cfg(not(target_os = "macos"))]
-const MENUBAR_HEIGHT: i32 = 0;
 
 // Ease-out cubic function: 1 - (1-t)^3
 fn ease_out_cubic(t: f32) -> f32 {
@@ -304,145 +341,122 @@ unsafe extern "system" fn ball_window_proc(
     DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
-/// 设置窗口为圆形
+/// 设置窗口为透明矩形（悬浮球 + 搜索按钮并排布局）
 /// caller: 调用来源标识，用于诊断日志对比（如 "init", "on_blur", "after_menu", "show"）
-fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: &str) {
+fn apply_circular_window_mask(_window: &tauri::WebviewWindow, _size: u32, caller: &str) {
     #[cfg(target_os = "macos")]
     {
-        use cocoa::base::{id, nil, YES};
-        use objc::{msg_send, sel, sel_impl};
-
-        log_msg(&format!("[apply_circular_window_mask] caller={} size={} (macOS)", caller, size));
-
-        if let Ok(ns_window) = window.ns_window() {
-            let ns_window = ns_window as id;
-            unsafe {
-                let content_view: id = msg_send![ns_window, contentView];
-                let _: () = msg_send![content_view, setWantsLayer: YES];
-                let layer: id = msg_send![content_view, layer];
-                if layer != nil {
-                    let _: () = msg_send![layer, setCornerRadius: (size / 2) as f64];
-                    let _: () = msg_send![layer, setMasksToBounds: YES];
-                }
-            }
-        }
+        // macOS: 不需要设置圆角，前端 CSS 处理
+        log_msg(&format!("[apply_window_styles] caller={} (macOS - 透明矩形窗口)", caller));
     }
 
     #[cfg(windows)]
     {
-        // 使用 SetWindowRgn 让窗口本身变圆，这是 Windows 上实现圆形窗口的可靠方案
-        // 同时移除 WS_CAPTION 消除 Windows 11 标题栏热区（Snap Layout 控件）
+        // Windows: 设置窗口样式但不再应用圆形遮罩
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Graphics::Dwm::*;
-        use windows::Win32::Graphics::Gdi::{CreateEllipticRgn, SetWindowRgn, ClientToScreen};
         use std::ffi::c_void;
 
         if let Ok(hwnd) = window.hwnd() {
             let hwnd = HWND(hwnd.0);
 
-            // 获取 DPI 缩放因子（用于日志对比）
-            let scale_factor = window.scale_factor().unwrap_or(1.0);
-            let calculated_phys_size = (size as f64 * scale_factor) as i32;
-
-            // 关键修复：获取窗口实际的物理尺寸，而不是手动计算
-            let (phys_size, _outer_width, _outer_height) = if let Ok(outer_size) = window.outer_size() {
-                // outer_size 返回 PhysicalSize，直接使用
-                let w = outer_size.width as i32;
-                let h = outer_size.height as i32;
-                (w.max(h), w, h)
-            } else {
-                // 回退到手动计算
-                (calculated_phys_size, calculated_phys_size, calculated_phys_size)
-            };
-
             unsafe {
-                // === 对比诊断：获取完整的窗口状态 ===
-                let mut window_rect = windows::Win32::Foundation::RECT::default();
-                let _ = GetWindowRect(hwnd, &mut window_rect);
-                let mut client_rect = windows::Win32::Foundation::RECT::default();
-                let _ = GetClientRect(hwnd, &mut client_rect);
+                log_msg(&format!("[apply_window_styles] caller={} 开始设置窗口样式", caller));
 
-                // 获取客户区左上角在屏幕上的位置
-                let mut client_top_left = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-                let _ = ClientToScreen(hwnd, &mut client_top_left);
-
-                // 计算客户区偏移（客户区相对于窗口左上角的偏移）
-                let offset_x = client_top_left.x - window_rect.left;
-                let offset_y = client_top_left.y - window_rect.top;
-
-                // 获取 DWM 扩展边界
-                let mut dwm_rect = windows::Win32::Foundation::RECT::default();
-                let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                    &mut dwm_rect as *mut _ as *mut c_void, std::mem::size_of::<windows::Win32::Foundation::RECT>() as u32);
-
-                // 获取当前窗口样式
-                let current_style = GetWindowLongW(hwnd, GWL_STYLE);
-
-                log_msg(&format!(
-                    "[诊断] caller={} WindowRect=({},{})-({},{}) [{}x{}] ClientRect={}x{} offset=({},{}) DWMRect=({},{})-({},{}) Style=0x{:X}",
-                    caller,
-                    window_rect.left, window_rect.top, window_rect.right, window_rect.bottom,
-                    window_rect.right - window_rect.left, window_rect.bottom - window_rect.top,
-                    client_rect.right - client_rect.left, client_rect.bottom - client_rect.top,
-                    offset_x, offset_y,
-                    dwm_rect.left, dwm_rect.top, dwm_rect.right, dwm_rect.bottom,
-                    current_style
-                ));
-
-                // 1. 设置圆形窗口遮罩（bRedraw=false，避免立即触发 WM_NCPAINT）
-                let hrgn = CreateEllipticRgn(0, 0, phys_size, phys_size);
-                let rgn_result = SetWindowRgn(hwnd, Some(hrgn), false);
-                log_msg(&format!("[apply_circular_window_mask] caller={} SetWindowRgn(0,0,{},{}) result={:?}", caller, phys_size, phys_size, rgn_result));
-
-                // 2. 清除标题栏装饰相关样式位，保留其他原始位（避免破坏 DWM 内部状态）
-                // 清除：WS_CAPTION(0xC00000) | WS_BORDER(0x800000) | WS_DLGFRAME(0x400000)
-                //       | WS_SYSMENU(0x80000) | WS_MINIMIZEBOX(0x20000) | WS_MAXIMIZEBOX(0x10000) | WS_THICKFRAME(0x40000)
+                // 1. 清除标题栏装饰相关样式位
                 const DECORATION_MASK: i32 = 0x00CF0000u32 as i32;
                 let old_style = GetWindowLongW(hwnd, GWL_STYLE);
                 let new_style = old_style & !DECORATION_MASK;
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
-                log_msg(&format!("[apply_circular_window_mask] caller={} Style: 0x{:X} -> 0x{:X} (清除装饰位)", caller, old_style, new_style));
 
-                // 3. 添加 WS_EX_LAYERED（分层窗口，支持透明）
+                // 2. 添加 WS_EX_LAYERED（分层窗口，支持透明）
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
 
-                // 4. 先禁用 DWM NC 渲染（必须在 SWP_FRAMECHANGED 之前，否则 FRAMECHANGED 触发的重绘会产生残影）
+                // 3. 禁用 DWM NC 渲染
                 const DWMWA_NCRENDERING_POLICY_VAL: windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE =
                     windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(2);
                 const DWMNCRP_DISABLED: i32 = 1;
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY_VAL,
                     &DWMNCRP_DISABLED as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
 
-                // 5. 禁用系统背景（DWMSBT_NONE=1）
+                // 4. 禁用系统背景
                 const DWMSBT_NONE: i32 = 1;
                 let backdrop_type: i32 = DWMSBT_NONE;
                 let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
                     &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
 
-                // 6. 【不再调用 DwmExtendFrameIntoClientArea】
-                // margins={-1,-1,-1,-1} 会让 DWM 在 focus 变化时重绘整个玻璃帧边缘，绕过 DWMNCRP_DISABLED
-                // WebView2 通过 DirectComposition + DefaultBackgroundColor={A:0} 自行处理透明，不依赖此 API
-
-                // 7. 最后触发刷新（此时 DWMNCRP_DISABLED 已生效，不会产生 NC 重绘残影）
+                // 5. 触发刷新
                 let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-                // 8. WndProc 子类化：拦截 WM_NCCALCSIZE，从协议层彻底消除 NC 区域
-                // 只需注册一次，后续系统事件不会再恢复标题栏热区
+                // 6. WndProc 子类化：拦截 WM_NCCALCSIZE
                 if !SUBCLASS_INSTALLED.load(Ordering::Relaxed) {
                     use windows::Win32::UI::Shell::SetWindowSubclass;
                     let ok = SetWindowSubclass(hwnd, Some(ball_window_proc), 1, 0);
                     if ok.as_bool() {
                         SUBCLASS_INSTALLED.store(true, Ordering::Relaxed);
-                        log_msg(&format!("[apply_circular_window_mask] caller={} WM_NCCALCSIZE 子类化注册成功", caller));
-                    } else {
-                        log_msg(&format!("[apply_circular_window_mask] caller={} WM_NCCALCSIZE 子类化注册失败", caller));
+                        log_msg(&format!("[apply_window_styles] caller={} WM_NCCALCSIZE 子类化注册成功", caller));
                     }
                 }
 
-                log_msg(&format!("[apply_circular_window_mask] caller={} 完成", caller));
+                log_msg(&format!("[apply_window_styles] caller={} 完成", caller));
+            }
+        }
+    }
+}
+
+/// 为无边框透明窗口应用 Windows 样式（无标题栏、无遮罩）
+/// 用于聊天窗口等矩形无边框窗口
+fn apply_borderless_window_style(_window: &tauri::WebviewWindow, caller: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: 不需要额外处理
+        log_msg(&format!("[apply_borderless_window_style] caller={} (macOS - 无需处理)", caller));
+    }
+
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        use windows::Win32::Graphics::Dwm::*;
+        use std::ffi::c_void;
+
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = HWND(hwnd.0);
+
+            unsafe {
+                log_msg(&format!("[apply_borderless_window_style] caller={} 开始设置无边框窗口样式", caller));
+
+                // 1. 清除标题栏装饰相关样式位（WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME 等）
+                const DECORATION_MASK: i32 = 0x00CF0000u32 as i32;
+                let old_style = GetWindowLongW(hwnd, GWL_STYLE);
+                let new_style = old_style & !DECORATION_MASK;
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+
+                // 2. 添加 WS_EX_LAYERED（分层窗口，支持透明）
+                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
+
+                // 3. 禁用 DWM NC 渲染（阻止 DWM 绘制非客户区）
+                const DWMWA_NCRENDERING_POLICY_VAL: windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE =
+                    windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(2);
+                const DWMNCRP_DISABLED: i32 = 1;
+                let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY_VAL,
+                    &DWMNCRP_DISABLED as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
+
+                // 4. 禁用系统背景
+                const DWMSBT_NONE: i32 = 1;
+                let backdrop_type: i32 = DWMSBT_NONE;
+                let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
+                    &backdrop_type as *const i32 as *const c_void, std::mem::size_of::<i32>() as u32);
+
+                // 5. 触发 SWP_FRAMECHANGED 刷新窗口框架
+                let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+                log_msg(&format!("[apply_borderless_window_style] caller={} 完成", caller));
             }
         }
     }
@@ -1130,168 +1144,53 @@ fn move_window_by(window: tauri::Window, dx: i32, dy: i32) {
 
 /// 直接设置窗口绝对坐标（物理像素），不调用 outer_position，Windows 上性能更优
 #[tauri::command]
-fn move_window_to(window: tauri::Window, x: i32, y: i32) {
+fn move_window_to(app: tauri::AppHandle, x: i32, y: i32) {
     DRAG_WINDOW_X.store(x, Ordering::Relaxed);
     DRAG_WINDOW_Y.store(y, Ordering::Relaxed);
-    let _ = window.set_position(Position::Physical(PhysicalPosition { x, y }));
-}
 
-#[tauri::command]
-fn drag_end(app: tauri::AppHandle) {
-    let windows = app.webview_windows();
-    let Some(main_window) = windows.get("main") else {
-        return;
-    };
+    // 移动悬浮球窗口
+    if let Some(main_window) = app.webview_windows().get("main") {
+        let _ = main_window.set_position(Position::Physical(PhysicalPosition { x, y }));
 
-    // 新增：Windows 打印拖动结束时的窗口样式，用于诊断灰色背景
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_STYLE};
-        if let Ok(raw_hwnd) = main_window.hwnd() {
-            let hwnd = HWND(raw_hwnd.0);
-            unsafe {
-                let style = GetWindowLongW(hwnd, GWL_STYLE);
-                log_msg(&format!("[drag_end] 拖动结束时窗口样式=0x{:X}", style));
+        // 同步更新聊天窗口位置（如果可见）
+        if let Some(chat_window) = app.webview_windows().get("chat") {
+            if let Ok(true) = chat_window.is_visible() {
+                if let Ok(ball_size) = main_window.outer_size() {
+                    if let Ok(chat_size) = chat_window.outer_size() {
+                        // 聊天窗口与悬浮球窗口居中对齐
+                        let ball_center = x + ball_size.width as i32 / 2;
+                        let chat_x = ball_center - chat_size.width as i32 / 2;
+                        let chat_y = y + ball_size.height as i32;
+                        let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
+                            x: chat_x,
+                            y: chat_y,
+                        }));
+
+                        // 确保 z-order：悬浮球在聊天窗口之上
+                        ensure_ball_above_chat(&app);
+                    }
+                }
             }
         }
     }
+}
 
-    let Ok(pos) = main_window.outer_position() else {
-        return;
-    };
-    let Ok(size) = main_window.outer_size() else {
-        return;
-    };
-
-    // Get screen info
-    let Some(monitor) = main_window.current_monitor().ok().flatten() else {
-        return;
-    };
-    let screen_size = monitor.size();
-    let screen_width = screen_size.width as i32;
-    let screen_height = screen_size.height as i32;
-
-    let window_width = size.width as i32;
-    let window_height = size.height as i32;
-
-    // Calculate actual ball center position (considering BALL_PADDING)
-    let _ball_center_x = pos.x + window_width / 2;
-
-    // Edge detection with priority: left/right first, then top/bottom
-    let at_left = pos.x < EDGE_THRESHOLD;
-    let at_right = pos.x + window_width > screen_width - EDGE_THRESHOLD;
-    let at_top = pos.y < EDGE_THRESHOLD + MENUBAR_HEIGHT;
-    let at_bottom = pos.y + window_height > screen_height - EDGE_THRESHOLD;
-
-    // Determine edge with priority: horizontal edges first
-    let edge = if at_left {
-        Some("left")
-    } else if at_right {
-        Some("right")
-    } else if at_top {
-        Some("top")
-    } else if at_bottom {
-        Some("bottom")
-    } else {
-        None
-    };
-
+#[tauri::command]
+fn drag_end(_app: tauri::AppHandle) {
+    // 移除边缘吸附效果 - 仅重置交互状态
     let mut state = DOCK_STATE.lock().unwrap();
+    state.is_docked = false;
+    state.dock_edge = None;
+    state.is_popped_out = false;
+    state.is_in_pop_protection = false;
+    state.interaction_state = InteractionState::Idle;
+    drop(state);
 
-    if let Some(edge) = edge {
-        let pop_offset = 5;
-
-        // Use fixed visible amount for consistent UX
-        let visible_amount = DOCK_VISIBLE_AMOUNT;
-        let hide_amount = window_width / 2 - visible_amount / 2;
-
-        state.is_docked = true;
-        state.dock_edge = Some(edge.to_string());
-        state.is_popped_out = false;
-        state.interaction_state = InteractionState::Idle;
-        state.window_width = size.width;
-        state.window_height = size.height;
-
-        // Clamp Y position within screen bounds (considering menubar on macOS)
-        let clamped_y = pos.y.max(MENUBAR_HEIGHT).min(screen_height - window_height);
-        // Clamp X position within screen bounds
-        let clamped_x = pos.x.max(0).min(screen_width - window_width);
-
-        match edge {
-            "left" => {
-                // Hide to left, show DOCK_VISIBLE_RATIO of ball
-                state.hidden_x = -hide_amount;
-                state.hidden_y = clamped_y;
-                state.pop_out_x = pop_offset;
-                state.pop_out_y = clamped_y;
-            }
-            "right" => {
-                // Hide to right, show DOCK_VISIBLE_RATIO of ball
-                state.hidden_x = screen_width - window_width + hide_amount;
-                state.hidden_y = clamped_y;
-                state.pop_out_x = screen_width - window_width - pop_offset;
-                state.pop_out_y = clamped_y;
-            }
-            "top" => {
-                // Hide to top, show DOCK_VISIBLE_RATIO of ball
-                let top_hide_amount = window_height / 2 - visible_amount / 2;
-                state.hidden_x = clamped_x;
-                state.hidden_y = MENUBAR_HEIGHT - top_hide_amount;
-                state.pop_out_x = clamped_x;
-                state.pop_out_y = MENUBAR_HEIGHT + pop_offset;
-            }
-            "bottom" => {
-                // Hide to bottom, show DOCK_VISIBLE_RATIO of ball
-                let bottom_hide_amount = window_height / 2 - visible_amount / 2;
-                state.hidden_x = clamped_x;
-                state.hidden_y = screen_height - window_height + bottom_hide_amount;
-                state.pop_out_x = clamped_x;
-                state.pop_out_y = screen_height - window_height - pop_offset;
-            }
-            _ => {}
-        }
-
-        // Get target position before animation
-        let hidden_x = state.hidden_x;
-        let hidden_y = state.hidden_y;
-        let version = next_state_version();
-        state.interaction_state = InteractionState::Animating;
-        drop(state);
-
-        // Animate to hidden position
-        let main_window_clone = main_window.clone();
-        std::thread::spawn(move || {
-            animate_to_position(
-                &main_window_clone,
-                pos.x,
-                pos.y,
-                hidden_x,
-                hidden_y,
-                version,
-            );
-
-            // Update state after animation
-            let mut state = DOCK_STATE.lock().unwrap();
-            if state.interaction_state == InteractionState::Animating {
-                state.interaction_state = InteractionState::Idle;
-            }
-        });
-    } else {
-        // Undock - clear all protection state
-        state.is_docked = false;
-        state.dock_edge = None;
-        state.is_popped_out = false;
-        state.is_in_pop_protection = false;
-        state.interaction_state = InteractionState::Idle;
-
-        // Cancel pop protection timer
-        drop(state);
-        next_state_version(); // Cancel any pending animations
-        let mut timer = POP_PROTECTION_TIMER.lock().unwrap();
-        if let Some(_handle) = timer.take() {
-            // Let existing thread finish
-        }
+    // 取消任何待处理的动画和弹出保护定时器
+    next_state_version();
+    let mut timer = POP_PROTECTION_TIMER.lock().unwrap();
+    if let Some(_handle) = timer.take() {
+        // Let existing thread finish
     }
 }
 
@@ -1519,6 +1418,51 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
         // 与现有 on_navigation 回调共存不冲突：macOS 走 on_navigation，Windows 走此脚本。
         .initialization_script(r#"
 (function() {
+    // 主题初始化：直接在 <html> 上设置内联 CSS 变量
+    // 内联样式优先级最高，不依赖远端 CSS 版本、.dark 类或 localStorage 是否可用
+    try {
+        var __m = 'system';
+        try {
+            var __saved = localStorage.getItem('aidi-settings');
+            if (__saved) __m = JSON.parse(__saved).themeMode || 'system';
+        } catch(e2) {}
+        var __d = __m === 'dark' ||
+            (__m === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var __el = document.documentElement;
+        __el.classList.toggle('dark', __d);
+        if (__d) {
+            __el.style.setProperty('--foreground',          'oklch(0.985 0 0)');
+            __el.style.setProperty('--background',          'oklch(0.145 0 0)');
+            __el.style.setProperty('--card',                'oklch(0.205 0 0)');
+            __el.style.setProperty('--card-foreground',     'oklch(0.985 0 0)');
+            __el.style.setProperty('--muted',               'oklch(0.269 0 0)');
+            __el.style.setProperty('--muted-foreground',    'oklch(0.708 0 0)');
+            __el.style.setProperty('--accent',              'oklch(0.269 0 0)');
+            __el.style.setProperty('--accent-foreground',   'oklch(0.985 0 0)');
+            __el.style.setProperty('--primary',             'oklch(0.922 0 0)');
+            __el.style.setProperty('--primary-foreground',  'oklch(0.205 0 0)');
+            __el.style.setProperty('--border',              'oklch(1 0 0 / 10%)');
+            __el.style.setProperty('--input',               'oklch(1 0 0 / 15%)');
+            __el.style.setProperty('--secondary',           'oklch(0.269 0 0)');
+            __el.style.setProperty('--secondary-foreground','oklch(0.985 0 0)');
+        } else {
+            __el.style.setProperty('--foreground',          'oklch(0.145 0 0)');
+            __el.style.setProperty('--background',          'oklch(1 0 0)');
+            __el.style.setProperty('--card',                'oklch(1 0 0)');
+            __el.style.setProperty('--card-foreground',     'oklch(0.145 0 0)');
+            __el.style.setProperty('--muted',               'oklch(0.97 0 0)');
+            __el.style.setProperty('--muted-foreground',    'oklch(0.556 0 0)');
+            __el.style.setProperty('--accent',              'oklch(0.97 0 0)');
+            __el.style.setProperty('--accent-foreground',   'oklch(0.205 0 0)');
+            __el.style.setProperty('--primary',             'oklch(0.205 0 0)');
+            __el.style.setProperty('--primary-foreground',  'oklch(0.985 0 0)');
+            __el.style.setProperty('--border',              'oklch(0.922 0 0)');
+            __el.style.setProperty('--input',               'oklch(0.922 0 0)');
+            __el.style.setProperty('--secondary',           'oklch(0.97 0 0)');
+            __el.style.setProperty('--secondary-foreground','oklch(0.205 0 0)');
+        }
+    } catch(e) {}
+
     var _ALLOWED = ['hide_menu','show_optimizer_window','hide_optimizer_window',
         'show_main_window','hide_main_window','show_login_window','hide_login_window',
         'show_menu_window','menu_expand','menu_collapse','update_settings'];
@@ -1555,6 +1499,23 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
     {
         let _ = menu_window.set_shadow(false);
     }
+
+    // 监听窗口失焦事件，点击外部时自动隐藏菜单
+    let app_for_event = app.clone();
+    let _ = menu_window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(false) = event {
+            let app_clone = app_for_event.clone();
+            // 延迟检查，避免菜单内部点击时短暂失焦误触发
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if let Some(w) = app_clone.webview_windows().get("menu") {
+                    if w.is_visible().unwrap_or(false) {
+                        hide_menu(app_clone);
+                    }
+                }
+            });
+        }
+    });
 
     // build() 返回后再异步 navigate 到远程 URL，避免阻塞 UI 线程
     log_msg(&format!("[create_menu_window] 窗口构建成功，开始 navigate 到 {}", menu_url_str));
@@ -1789,6 +1750,297 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
     Ok(result)
 }
 
+// ==================== CHAT WINDOW ====================
+
+/// 聊天窗口创建状态标志
+static CHAT_WINDOW_CREATING: AtomicBool = AtomicBool::new(false);
+
+/// 创建聊天气泡窗口
+fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>) -> Result<tauri::WebviewWindow, tauri::Error> {
+    // 检查是否正在创建中
+    if CHAT_WINDOW_CREATING.load(Ordering::SeqCst) {
+        log_msg("[create_chat_window] 窗口正在创建中，跳过...");
+        return Err(tauri::Error::WindowNotFound);
+    }
+
+    CHAT_WINDOW_CREATING.store(true, Ordering::SeqCst);
+    log_msg("[create_chat_window] 开始创建聊天窗口...");
+
+    // 构建聊天 URL，如果有初始消息则通过 query 参数传递
+    let base_url = get_external_url_base(app);
+    let chat_url_str = match initial_message {
+        Some(msg) => {
+            let encoded = urlencoding::encode(msg);
+            format!("{}/#/chat?message={}", base_url, encoded)
+        }
+        None => format!("{}/#/chat", base_url)
+    };
+    log_msg(&format!("[create_chat_window] 聊天 URL: {}", chat_url_str));
+
+    // 先用 about:blank 创建窗口，避免 build() 阻塞
+    let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
+
+    log_msg("[create_chat_window] 使用 about:blank 构建窗口...");
+    let builder = tauri::WebviewWindowBuilder::new(app, "chat", blank_url)
+        .title("AIDI 聊天")
+        .inner_size(320.0, 428.0)  // 280px + padding + 8px 尖头区域
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(true)                // 允许用户拖拽调整（无尺寸限制）
+        .visible(false)
+        .devtools(true);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.hidden_title(true);
+
+    let chat_window = builder
+        .initialization_script(r#"
+            (function() {
+                // 监听关闭聊天窗口的命令
+                window.addEventListener('message', function(e) {
+                    if (e.data && e.data.type === 'close-chat') {
+                        window.__TAURI_INTERNALS__.invoke('hide_chat_window');
+                    }
+                });
+            })();
+        "#)
+        .build()?;
+
+    // 处理 Windows 无边框样式，确保完全移除标题栏
+    apply_borderless_window_style(&chat_window, "chat_window");
+
+    // 禁用系统阴影
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let _ = chat_window.set_shadow(false);
+    }
+
+    // 获取悬浮球窗口位置，将聊天窗口定位在悬浮球正下方
+    if let Some(main_window) = app.webview_windows().get("main") {
+        if let Ok(ball_pos) = main_window.outer_position() {
+            if let Ok(ball_size) = main_window.outer_size() {
+                if let Ok(chat_size) = chat_window.outer_size() {
+                    // 聊天窗口与悬浮球窗口居中对齐
+                    let ball_center = ball_pos.x + ball_size.width as i32 / 2;
+                    let chat_x = ball_center - chat_size.width as i32 / 2;
+                    let chat_y = ball_pos.y + ball_size.height as i32;
+
+                    let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
+                        x: chat_x,
+                        y: chat_y,
+                    }));
+                    log_msg(&format!("[create_chat_window] 聊天窗口位置: ({}, {})", chat_x, chat_y));
+                }
+            }
+        }
+    }
+
+    // build() 返回后再异步 navigate 到远程 URL
+    log_msg(&format!("[create_chat_window] 窗口构建成功，开始 navigate 到 {}", chat_url_str));
+    let chat_url = tauri::Url::parse(&chat_url_str).unwrap();
+    let _ = chat_window.navigate(chat_url);
+
+    // 设置窗口事件处理：关闭拦截 + 大小变化时重新定位
+    let chat_window_clone = chat_window.clone();
+    let app_clone = app.clone();
+    let _ = chat_window.on_window_event(move |event| {
+        match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                log_msg("chat 窗口关闭请求被拦截，隐藏窗口");
+                let _ = chat_window_clone.hide();
+                api.prevent_close();
+            }
+            tauri::WindowEvent::Resized(new_size) => {
+                // 窗口大小改变后，重新定位到悬浮球正下方（使用新尺寸计算位置）
+                log_msg(&format!("[chat_window] Resized 事件触发，新尺寸: {:?}", new_size));
+                if let Some(main_window) = app_clone.webview_windows().get("main") {
+                    if let Ok(ball_pos) = main_window.outer_position() {
+                        if let Ok(ball_size) = main_window.outer_size() {
+                            let ball_center = ball_pos.x + ball_size.width as i32 / 2;
+                            let chat_x = ball_center - new_size.width as i32 / 2;
+                            let chat_y = ball_pos.y + ball_size.height as i32;
+                            let _ = chat_window_clone.set_position(Position::Physical(PhysicalPosition {
+                                x: chat_x,
+                                y: chat_y,
+                            }));
+                            log_msg(&format!("[chat_window] Resized 后重新定位: ({}, {})", chat_x, chat_y));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
+
+    CHAT_WINDOW_CREATING.store(false, Ordering::SeqCst);
+    log_msg("[create_chat_window] 窗口设置完成，返回窗口对象");
+    Ok(chat_window)
+}
+
+/// 显示聊天窗口
+#[tauri::command]
+async fn show_chat_window(app: tauri::AppHandle, initial_message: Option<String>, visible: Option<bool>) {
+    let should_show = visible.unwrap_or(true);
+    log_msg(&format!("[show_chat_window] 开始, initial_message={:?}, visible={:?}", initial_message, should_show));
+
+    // 如果窗口已存在，显示并更新位置
+    if let Some(chat_window) = app.webview_windows().get("chat") {
+        // 更新窗口位置到悬浮球窗口正下方
+        if let Some(main_window) = app.webview_windows().get("main") {
+            if let Ok(ball_pos) = main_window.outer_position() {
+                if let Ok(ball_size) = main_window.outer_size() {
+                    if let Ok(chat_size) = chat_window.outer_size() {
+                        // 聊天窗口与悬浮球窗口居中对齐
+                        let ball_center = ball_pos.x + ball_size.width as i32 / 2;
+                        let chat_x = ball_center - chat_size.width as i32 / 2;
+                        let chat_y = ball_pos.y + ball_size.height as i32;
+                        let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
+                            x: chat_x,
+                            y: chat_y,
+                        }));
+                    }
+                }
+            }
+        }
+
+        if should_show {
+            let _ = chat_window.show();
+            let _ = chat_window.set_focus();
+            // 确保悬浮球在聊天窗口之上
+            ensure_ball_above_chat(&app);
+        }
+
+        // 如果有初始消息，发送到聊天窗口
+        if let Some(msg) = initial_message {
+            let _ = chat_window.emit("chat-initial-message", msg);
+        }
+    } else {
+        // 窗口不存在，创建新窗口
+        match create_chat_window(&app, initial_message.as_deref()) {
+            Ok(w) => {
+                if should_show {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                    // 确保悬浮球在聊天窗口之上
+                    ensure_ball_above_chat(&app);
+                }
+                // 如果 should_show = false，窗口创建后保持隐藏
+            }
+            Err(e) => {
+                log_msg(&format!("[show_chat_window] 创建窗口失败: {:?}", e));
+            }
+        }
+    }
+}
+
+/// 隐藏聊天窗口
+#[tauri::command]
+fn hide_chat_window(app: tauri::AppHandle) {
+    if let Some(chat_window) = app.webview_windows().get("chat") {
+        let _ = chat_window.hide();
+        log_msg("[hide_chat_window] 聊天窗口已隐藏");
+    }
+}
+
+/// 动态调整聊天窗口大小
+/// 位置更新由 Resized 事件自动处理
+#[tauri::command]
+fn resize_chat_window(
+    app: tauri::AppHandle,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let windows = app.webview_windows();
+    let Some(chat_window) = windows.get("chat") else {
+        return Err("Chat window not found".to_string());
+    };
+
+    // 尺寸限制（横屏 3:4 比例）
+    const MIN_WIDTH: f64 = 400.0;
+    const MAX_WIDTH: f64 = 600.0;
+    const MIN_HEIGHT: f64 = 300.0;
+    const MAX_HEIGHT: f64 = 450.0;
+
+    let final_width = width.clamp(MIN_WIDTH, MAX_WIDTH);
+    let final_height = height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+
+    // 设置大小后，Resized 事件会自动更新位置
+    chat_window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+        width: final_width,
+        height: final_height,
+    })).map_err(|e| format!("Failed to set size: {:?}", e))?;
+
+    log_msg(&format!("[resize_chat_window] 窗口调整为: {} x {}，等待 Resized 事件更新位置", final_width, final_height));
+    Ok(())
+}
+
+/// 重置聊天窗口到默认大小
+/// 位置更新由 Resized 事件自动处理
+#[tauri::command]
+fn reset_chat_window_size(app: tauri::AppHandle) -> Result<(), String> {
+    let windows = app.webview_windows();
+    let Some(chat_window) = windows.get("chat") else {
+        return Err("Chat window not found".to_string());
+    };
+
+    // 设置大小后，Resized 事件会自动更新位置
+    chat_window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+        width: 320.0,
+        height: 428.0,
+    })).map_err(|e| format!("Failed to reset size: {:?}", e))?;
+
+    log_msg("[reset_chat_window_size] 窗口大小已重置，等待 Resized 事件更新位置");
+    Ok(())
+}
+
+/// 关闭并销毁聊天窗口
+#[tauri::command]
+fn close_chat_window(app: tauri::AppHandle) {
+    if let Some(chat_window) = app.webview_windows().get("chat") {
+        // 由于设置了关闭拦截，这里需要先移除拦截或者直接使用 destroy
+        // 简单起见，直接隐藏
+        let _ = chat_window.hide();
+        log_msg("[close_chat_window] 聊天窗口已关闭");
+    }
+}
+
+/// 发送聊天消息并显示聊天窗口
+#[tauri::command]
+async fn send_chat_message(app: tauri::AppHandle, message: String) {
+    log_msg(&format!("[send_chat_message] 发送消息: {}", message));
+
+    // 显示聊天窗口并传入初始消息
+    show_chat_window(app, Some(message), Some(true)).await;
+}
+
+/// 更新聊天窗口位置（当悬浮球移动时调用）
+#[tauri::command]
+fn update_chat_window_position(app: tauri::AppHandle) {
+    if let (Some(chat_window), Some(main_window)) =
+        (app.webview_windows().get("chat"), app.webview_windows().get("main")) {
+        // 只有聊天窗口可见时才更新位置
+        if let Ok(true) = chat_window.is_visible() {
+            if let Ok(ball_pos) = main_window.outer_position() {
+                if let Ok(ball_size) = main_window.outer_size() {
+                    if let Ok(chat_size) = chat_window.outer_size() {
+                        // 聊天窗口与悬浮球窗口居中对齐
+                        // chat_x = ball_pos.x + ball_width/2 - chat_width/2
+                        let ball_center = ball_pos.x + ball_size.width as i32 / 2;
+                        let chat_x = ball_center - chat_size.width as i32 / 2;
+                        let chat_y = ball_pos.y + ball_size.height as i32;
+                        let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
+                            x: chat_x,
+                            y: chat_y,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 登录成功后的处理逻辑（从 on_login_success 抽取出来供 on_navigation 调用）
 fn handle_login_success(app: &tauri::AppHandle) {
     log_msg("handle_login_success: 开始处理登录成功");
@@ -1913,7 +2165,7 @@ fn show_menu(app: tauri::AppHandle) {
     // 菜单尺寸常量
     let menu_width: i32 = 192;
     let menu_height: i32 = 124;
-    let menu_gap: i32 = 4;
+    let menu_gap: i32 = 0;
 
     // 获取球的逻辑位置
     let Ok(ball_pos) = main_window.outer_position() else {
@@ -1937,12 +2189,15 @@ fn show_menu(app: tauri::AppHandle) {
     };
 
     // 垂直方向：菜单在球下方（如果空间不够则上方）
-    let space_below = screen_height - (ball_y + visual_ball_size);
+    // 注意：ball_y 是窗口顶部，实际球体视觉顶部在 ball_y + BALL_PADDING
+    let ball_visual_top = ball_y + BALL_PADDING as i32;
+    let ball_visual_bottom = ball_visual_top + ball_size as i32;
+    let space_below = screen_height - ball_visual_bottom;
     let show_above = space_below < menu_height + menu_gap;
     let menu_y = if show_above {
-        ball_y - menu_height - menu_gap
+        ball_visual_top - menu_height - menu_gap
     } else {
-        ball_y + visual_ball_size + menu_gap
+        ball_visual_bottom + menu_gap
     };
 
     eprintln!("show_menu: screen=({}, {}), ball=({}, {}, size={}), ball_center_x={}, opens_left={}, menu=({}, {})",
@@ -2141,6 +2396,11 @@ fn update_settings(app: tauri::AppHandle, settings: Settings) {
         let mut ball_size = BALL_SIZE.lock().unwrap();
         *ball_size = settings.ball_size;
     }
+    // 保存 theme_mode 供 build_menu_url 使用
+    {
+        let mut theme_mode = THEME_MODE.lock().unwrap();
+        *theme_mode = settings.theme_mode.clone();
+    }
 
     let _ = app.emit("settings-updated", settings);
 }
@@ -2170,7 +2430,15 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
     if let Some(main_window) = app.webview_windows().get("main") {
         // 确保最小尺寸，外环需要 ballSize + 8，再加两边 padding
         let actual_size = size.max(30);
-        let full_size = actual_size + BALL_PADDING * 2;
+
+        // 窗口尺寸计算：
+        // - 宽度 = ballSize(悬浮球) + 分割线(1px) + 36(搜索按钮) + border*2(2px)，精确匹配内容宽度
+        // - 高度 = ballSize + padding * 2
+        let divider_width = 1u32;
+        let search_width = 36u32;
+        let border = 1u32;
+        let window_width = actual_size + divider_width + search_width + border * 2;
+        let window_height = actual_size + BALL_PADDING * 2;
 
         // 获取当前位置和旧尺寸
         let current_pos = main_window.outer_position().ok();
@@ -2178,12 +2446,8 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
 
         if let (Some(pos), Some(old)) = (current_pos, old_size) {
             // 计算新的窗口位置，保持视觉中心不变
-            // 当窗口从 120x120 缩小到 84x84 时：
-            // - 旧中心 = pos + 60
-            // - 新中心 = new_pos + 42
-            // - 要保持中心不变: new_pos = pos + 60 - 42 = pos - 18
-            let new_x = pos.x - ((old.width as u32 - full_size) / 2) as i32;
-            let new_y = pos.y - ((old.height as u32 - full_size) / 2) as i32;
+            let new_x = pos.x - ((old.width as u32 - window_width) / 2) as i32;
+            let new_y = pos.y - ((old.height as u32 - window_height) / 2) as i32;
 
             // 先设置位置，再设置尺寸
             let _ = main_window.set_position(Position::Physical(PhysicalPosition { x: new_x, y: new_y }));
@@ -2191,16 +2455,69 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
 
         // 使用 LogicalSize 以正确支持高 DPI 屏幕
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
-            width: full_size as f64,
-            height: full_size as f64,
+            width: window_width as f64,
+            height: window_height as f64,
         }));
 
-        // 设置窗口为圆形
-        apply_circular_window_mask(&main_window, full_size, "update_size");
+        // 注意：不再使用圆形遮罩，因为窗口现在是矩形的
+        // 圆形效果由前端 CSS 实现
 
         // 同步更新内部状态
         let mut ball_size = BALL_SIZE.lock().unwrap();
         *ball_size = actual_size;
+    }
+}
+
+// 展开输入框：窗口宽度扩至 ballSize + 分割线 + 36(搜索按钮) + inputWidth + border*2，精确匹配内容宽度
+#[tauri::command]
+fn expand_input_window(app: tauri::AppHandle) {
+    if let Some(main_window) = app.webview_windows().get("main") {
+        let ball_size = *BALL_SIZE.lock().unwrap();
+        // 展开态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 输入框 240 + 边框 2 = 339px
+        // 但实际前端 pill-shell 宽度为 303px，使用固定值以保持一致
+        let window_width = 303u32;
+        let window_height = ball_size + BALL_PADDING * 2;
+        let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
+            width: window_width as f64,
+            height: window_height as f64,
+        }));
+
+        // 窗口大小改变后，更新聊天窗口位置
+        update_chat_window_position(app.clone());
+    }
+}
+
+// 收起输入框：恢复收起态宽度，精确匹配内容宽度
+#[tauri::command]
+fn collapse_input_window(app: tauri::AppHandle) {
+    if let Some(main_window) = app.webview_windows().get("main") {
+        let ball_size = *BALL_SIZE.lock().unwrap();
+        // 收起态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 边框 2 = 99px
+        // 硬编码以避免 ball_size 获取不正确导致的问题
+        let window_width = 99u32;
+        let window_height = ball_size + BALL_PADDING * 2;
+        let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
+            width: window_width as f64,
+            height: window_height as f64,
+        }));
+
+        // 窗口大小改变后，更新聊天窗口位置
+        update_chat_window_position(app.clone());
+    }
+}
+
+// 调整输入框窗口高度（用于长文本输入时自动扩展）
+#[tauri::command]
+fn resize_input_window_height(app: tauri::AppHandle, height: u32) {
+    if let Some(main_window) = app.webview_windows().get("main") {
+        let window_height = height + BALL_PADDING * 2;
+        let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
+            width: 303f64,
+            height: window_height as f64,
+        }));
+
+        // 窗口大小改变后，更新聊天窗口位置
+        update_chat_window_position(app.clone());
     }
 }
 
@@ -2925,40 +3242,76 @@ pub fn run() {
                 }
 
             }
-            // 注册全局快捷键 Alt+Q：切换悬浮球显示/隐藏
+            // 注册全局快捷键：唤起聊天窗口
+            // Mac: Alt+Q, Windows: Alt+1
             // 容错处理：快捷键注册失败不应影响应用启动
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-            let shortcut: Shortcut = "Alt+Q".parse().expect("invalid shortcut");
+
+            // 根据平台选择快捷键
+            #[cfg(target_os = "macos")]
+            let shortcut_str = "Alt+Q";
+            #[cfg(not(target_os = "macos"))]
+            let shortcut_str = "Alt+1";
+
+            let shortcut: Shortcut = shortcut_str.parse().expect("invalid shortcut");
             if let Err(e) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
+                    // 确保悬浮球可见
                     if let Some(window) = app.webview_windows().get("main") {
                         let visible = BALL_VISIBLE.load(Ordering::SeqCst);
-                        if visible {
-                            let _ = window.hide();
-                            // 隐藏其他所有打开的窗口
-                            let windows = app.webview_windows();
-                            for (label, win) in &windows {
-                                if label != "main" {
-                                    let _ = win.hide();
-                                }
-                            }
-                            BALL_VISIBLE.store(false, Ordering::SeqCst);
-                            sync_toggle_menu_item(app, false);
-                        } else {
+                        if !visible {
                             let _ = window.show();
                             BALL_VISIBLE.store(true, Ordering::SeqCst);
                             sync_toggle_menu_item(app, true);
-                            // 重新应用圆形遮罩，防止 WS_CAPTION 热区重现
+                            // 应用窗口样式
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                             let full_size = ball_size_val + BALL_PADDING * 2;
-                            apply_circular_window_mask(window, full_size, "shortcut_toggle");
+                            apply_circular_window_mask(window, full_size, "shortcut_chat");
                         }
                     }
+
+                    // 显示聊天窗口
+                    let app_clone = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        // 获取或创建聊天窗口
+                        if let Some(chat_window) = app_clone.webview_windows().get("chat") {
+                            // 更新窗口位置到悬浮球下方
+                            if let Some(main_window) = app_clone.webview_windows().get("main") {
+                                if let Ok(ball_pos) = main_window.outer_position() {
+                                    if let Ok(ball_size) = main_window.outer_size() {
+                                        if let Ok(chat_size) = chat_window.outer_size() {
+                                            // 聊天窗口与悬浮球窗口居中对齐
+                                            let ball_center = ball_pos.x + ball_size.width as i32 / 2;
+                                            let chat_x = ball_center - chat_size.width as i32 / 2;
+                                            let chat_y = ball_pos.y + ball_size.height as i32;
+                                            let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
+                                                x: chat_x,
+                                                y: chat_y,
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+                            let _ = chat_window.show();
+                            let _ = chat_window.set_focus();
+                        } else {
+                            // 创建新窗口
+                            match create_chat_window(&app_clone, None) {
+                                Ok(w) => {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                                Err(e) => {
+                                    log_msg(&format!("[快捷键] 创建聊天窗口失败: {:?}", e));
+                                }
+                            }
+                        }
+                    });
                 }
             }) {
-                log_msg(&format!("[Warning] 全局快捷键 Alt+Q 注册失败: {:?}，应用将继续运行", e));
+                log_msg(&format!("[Warning] 全局快捷键 {} 注册失败: {:?}，应用将继续运行", shortcut_str, e));
             } else {
-                log_msg("[Info] 全局快捷键 Alt+Q 注册成功");
+                log_msg(&format!("[Info] 全局快捷键 {} 注册成功", shortcut_str));
             }
 
             // 拦截 optimizer 窗口关闭事件：隐藏而不是销毁
@@ -3007,6 +3360,9 @@ pub fn run() {
             set_report_user_info,
             trigger_report,
             update_window_size,
+            expand_input_window,
+            collapse_input_window,
+            resize_input_window_height,
             start_drag,
             move_window_by,
             move_window_to,
@@ -3034,6 +3390,13 @@ pub fn run() {
             log_debug,
             save_login_info,
             diagnose_window,
+            show_chat_window,
+            hide_chat_window,
+            close_chat_window,
+            send_chat_message,
+            update_chat_window_position,
+            resize_chat_window,
+            reset_chat_window_size,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

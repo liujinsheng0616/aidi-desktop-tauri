@@ -1,15 +1,62 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import FloatingBall from './components/FloatingBall.vue'
+import QuickInputBox from './components/QuickInputBox.vue'
 import { isLoggedIn, getToken, fetchCurrentUser, setUser, getUser } from './stores/auth'
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
+import { colorThemes } from './shared/colorThemes'
 
 const ballSize = ref(60)
 const opacity = ref(100)
 const colorTheme = ref('cyan-purple')
 const initialized = ref(false)
+const inputBoxHeight = ref(60) // 输入框动态高度
+const isInputExpanded = ref(false) // 输入框展开状态
+
+// 胶囊容器高度（随输入框动态变化）
+const capsuleHeight = computed(() => {
+  if (inputBoxHeight.value > ballSize.value) {
+    return inputBoxHeight.value
+  }
+  return ballSize.value
+})
+
+// 胶囊容器宽度（显式控制，用于动画）
+const shellWidth = ref(99) // 默认收起态宽度
+
+// 胶囊容器样式
+const capsuleStyle = computed(() => {
+  const h = capsuleHeight.value
+  const currentTheme = colorThemes[colorTheme.value] || colorThemes['cyan-purple']
+  return {
+    width: `${shellWidth.value}px`,
+    height: `${h}px`,
+    borderRadius: `${Math.min(h / 2, 40)}px`, // 限制最大圆角
+    '--theme-primary': currentTheme.primary,
+    '--theme-glow': currentTheme.glow,
+  }
+})
+
+async function handleInputExpand(expanded: boolean) {
+  isInputExpanded.value = expanded
+  if (expanded) {
+    shellWidth.value = 303 // 展开态
+    await invoke('expand_input_window')
+  } else {
+    // 先让前端宽度动画完成
+    shellWidth.value = 99
+    // 等待 CSS 动画完成（200ms）后再收窄窗口
+    setTimeout(() => invoke('collapse_input_window'), 200)
+  }
+}
+
+// 监听输入框高度变化，调整窗口高度
+async function handleInputHeightChange(height: number) {
+  inputBoxHeight.value = height
+  await invoke('resize_input_window_height', { height })
+}
 
 let isCreatingAigcWindow = false
 let unlistenOpenAigc: (() => void) | null = null
@@ -50,7 +97,7 @@ async function syncAuthToBackend() {
         userName: user.name || user.nickName
       })
     } catch (e) {
-      console.error('同步认证信息到后端失败:', e)
+      // 同步失败，忽略
     }
   }
 }
@@ -119,7 +166,6 @@ onMounted(async () => {
       })
       webview.once('tauri://created', () => { isCreatingAigcWindow = false })
       webview.once('tauri://error', (e) => {
-        console.error('Error creating aigc window:', e)
         isCreatingAigcWindow = false
       })
     }
@@ -155,7 +201,13 @@ onUnmounted(() => {
 
 <template>
   <div class="app">
-    <FloatingBall v-if="initialized" :size="ballSize" :opacity="opacity" :colorTheme="colorTheme" />
+    <div v-if="initialized" class="pill-shell" :style="capsuleStyle">
+      <div class="floating-ball-wrapper" :style="{ width: `${ballSize}px`, height: `${ballSize}px` }">
+        <FloatingBall :size="ballSize" :opacity="opacity" :colorTheme="colorTheme" :isInputExpanded="isInputExpanded" />
+      </div>
+      <div class="pill-divider"></div>
+      <QuickInputBox :size="ballSize" :opacity="opacity" :colorTheme="colorTheme" @expand="handleInputExpand" @heightChange="handleInputHeightChange" />
+    </div>
   </div>
 </template>
 
@@ -165,8 +217,52 @@ onUnmounted(() => {
   height: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding-left: 0;
   background: transparent;
-  pointer-events: none;   /* 透明 padding 区域鼠标穿透到桌面 */
+  pointer-events: none;
+}
+
+/* 统一胶囊容器 - 微信深灰风格 */
+.pill-shell {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  pointer-events: auto;
+  position: relative;
+  /* 深灰色纯色背景，无毛玻璃 */
+  background: rgba(30, 30, 30, 0.85);
+  /* 细微边框 */
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* 平滑过渡 */
+  transition:
+    background 220ms ease,
+    transform 150ms ease,
+    width 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    height 150ms ease;
+  overflow: visible;
+}
+
+.pill-shell:hover {
+  background: rgba(40, 40, 40, 0.9);
+  transform: translateY(-1px);
+}
+
+.pill-shell:active {
+  transform: translateY(0px) scale(0.99);
+}
+
+/* 球和搜索之间的分割线 */
+.pill-divider {
+  width: 1px;
+  height: 36%;
+  background: rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.floating-ball-wrapper {
+  flex-shrink: 0;
+  position: relative;
 }
 </style>

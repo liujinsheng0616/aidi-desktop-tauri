@@ -14,7 +14,6 @@ export interface UserInfo {
 
 // 写入 Rust 日志文件
 async function logAuth(message: string) {
-  console.log(`[Auth] ${message}`)
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('log_debug', { message: `[Auth] ${message}` })

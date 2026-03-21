@@ -1,24 +1,17 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { listen, emit } from '@tauri-apps/api/event'
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
 import { getUser } from '../stores/auth'
+import { colorThemes } from '../shared/colorThemes'
 
 const props = defineProps<{
   size?: number
   opacity?: number
   colorTheme?: string
+  isInputExpanded?: boolean
 }>()
-
-// 颜色主题配置
-const colorThemes: Record<string, { primary: string; glow: string }> = {
-  'cyan-purple': { primary: '#667eea', glow: 'rgba(102, 126, 234, 0.4)' },
-  'ocean': { primary: '#0052d4', glow: 'rgba(0, 82, 212, 0.4)' },
-  'forest': { primary: '#11998e', glow: 'rgba(17, 153, 142, 0.4)' },
-  'fire': { primary: '#f12711', glow: 'rgba(241, 39, 17, 0.4)' },
-  'midnight': { primary: '#1a1a1a', glow: 'rgba(50, 50, 50, 0.4)' },
-}
 
 // 判断是否为开发模式（临时注释，调试完成后恢复）
 // const isDev = import.meta.env.DEV
@@ -145,6 +138,7 @@ function handleMouseMove(e: MouseEvent) {
 // 鼠标进入 - 触发吸附弹出
 function handleMouseEnter() {
   if (isDragging) return
+  if (props.isInputExpanded) return // 输入框展开时不显示菜单
 
   // 取消隐藏定时器
   if (hideDockTimeout) {
@@ -231,18 +225,20 @@ async function handleMouseUp() {
             alwaysOnTop: false
           })
           webview.once('tauri://created', () => {
-            console.log('Webview window created')
+            // 窗口创建成功
           })
           webview.once('tauri://error', (e) => {
-            console.error('Error creating webview window:', e)
+            // 窗口创建失败，忽略
           })
         }
       } catch (error) {
-        console.error('Error handling window:', error)
+        // 处理窗口错误，忽略
       }
     } else {
       // 记录本次点击时间，等待可能的第二次点击
       lastClickTime = now
+      // 单击悬浮球时，通知收起输入框
+      emit('collapse-input')
     }
   }
 
@@ -285,9 +281,6 @@ onUnmounted(() => {
     @contextmenu="handleContextMenu"
   >
     <div class="ball-content" :style="{ transform: `scale(${ballScale})` }">
-      <!-- 外圈光环 - 呼吸动画 -->
-      <div class="glow-ring" :style="{ borderColor: currentTheme.glow }"></div>
-
       <!-- 主球体 -->
       <div class="ball" :style="{ background: currentTheme.primary }"></div>
 
@@ -336,26 +329,13 @@ onUnmounted(() => {
   cursor: grabbing;
 }
 
-/* 外圈光环 - 呼吸动画 */
-.glow-ring {
-  position: absolute;
-  width: 55px;
-  height: 55px;
-  left: 2.5px;
-  top: 2.5px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 107, 107, 0.4);
-  animation: breathe 2s ease-in-out infinite;
-  pointer-events: none;
-}
-
 /* 主球体 */
 .ball {
   position: absolute;
-  width: 45px;
-  height: 45px;
-  left: 7.5px;
-  top: 7.5px;
+  width: 50px;
+  height: 50px;
+  left: 5px;
+  top: 5px;
   border-radius: 50%;
   background: #FF6B6B;
   pointer-events: none;
@@ -364,10 +344,10 @@ onUnmounted(() => {
 /* 内圈细线 */
 .inner-ring {
   position: absolute;
-  width: 35px;
-  height: 35px;
-  left: 12.5px;
-  top: 12.5px;
+  width: 40px;
+  height: 40px;
+  left: 10px;
+  top: 10px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.25);
   pointer-events: none;
@@ -376,10 +356,10 @@ onUnmounted(() => {
 /* AIDI 文字 */
 .aidi-text {
   position: absolute;
-  width: 45px;
-  height: 45px;
-  left: 7.5px;
-  top: 7.5px;
+  width: 50px;
+  height: 50px;
+  left: 5px;
+  top: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -413,23 +393,6 @@ onUnmounted(() => {
   border-radius: 50%;
   background: #FFFFFF;
   pointer-events: none;
-}
-
-/* 呼吸动画 */
-@keyframes breathe {
-  0%, 100% {
-    opacity: 0.6;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.05);
-  }
-}
-
-/* 悬停效果 - 加速呼吸 */
-.floating-ball:hover .glow-ring {
-  animation-duration: 1s;
 }
 
 /* 点击效果 */

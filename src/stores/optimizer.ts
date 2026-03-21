@@ -437,7 +437,6 @@ async function reportDeviceInfo(systemInfo: SystemDetails) {
     })
     deviceReported.value = true
   } catch (e) {
-    console.warn('Device info report failed:', e)
     deviceReported.value = false
   }
 }

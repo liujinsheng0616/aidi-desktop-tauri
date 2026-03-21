@@ -168,7 +168,7 @@ async function handleClean() {
     // Refresh disk data after cleaning completes
     await refreshDisk()
   } catch (e) {
-    console.error('Clean failed:', e)
+    // 清理失败，忽略
   } finally {
     isCleaning.value = false
     isOperating.value = false

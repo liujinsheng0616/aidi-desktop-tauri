@@ -65,7 +65,7 @@ async function handleOptimize() {
     // Refresh data
     await refreshStartup()
   } catch (e) {
-    console.error('Optimize failed:', e)
+    // 优化失败，忽略
   } finally {
     isOptimizing.value = false
   }

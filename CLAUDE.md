@@ -40,6 +40,7 @@ npx tauri build
 |------|---------|------|
 | `main` | `index.html` → `src/main.ts` → `App.vue` → `FloatingBall.vue` | 可拖拽浮动球 |
 | `menu` | `menu.html` → `src/menu.ts` → `MenuPanel.vue` | 右键菜单弹窗 |
+| `chat` | 远程 URL → `aidi-desktop-web/#/chat` | AI 聊天面板 |
 | `optimizer` | `optimizer.html` → `src/optimizer.ts` → `OptimizerPanel.vue` | 系统优化面板 |
 
 所有窗口均无边框且透明。`main` 窗口初始为 120x120 的浮动球。Vite 配置为多页应用，包含上述三个 HTML 入口。
@@ -91,6 +92,7 @@ aidi-desktop-tauri/
 ├── optimizer.html                # 系统优化窗口
 ├── login.html                    # 飞书登录窗口
 ├── panel.html                    # AI 面板窗口（动态创建）
+├── chat.html                     # 聊天窗口（加载远程 URL）
 ├── vite.config.ts                # 多页应用配置，端口 1420
 │
 ├── src/
@@ -99,9 +101,10 @@ aidi-desktop-tauri/
 │   ├── optimizer.ts              # 系统优化 - 入口脚本
 │   ├── login.ts                  # 飞书登录 - 入口脚本
 │   ├── panel.ts                  # AI 面板 - 入口脚本
+│   ├── chat.ts                   # 聊天 - 入口脚本
 │   ├── App.vue                   # 浮动球 - 根组件
 │   ├── components/
-│   │   ├── FloatingBall.vue      # 浮动球 - 可拖拽球体、边缘吸附
+│   │   ├── FloatingBall.vue      # 浮动球 - 可拖拽球体
 │   │   ├── MenuPanel.vue         # 右键菜单 - 菜单面板
 │   │   ├── LoginPage.vue         # 飞书登录 - 扫码登录页
 │   │   └── optimizer/
@@ -168,6 +171,6 @@ if msg == WM_NCPAINT {
 
 - **端口 1420** 在 `vite.config.ts` 中硬编码，Tauri 的 `devUrl` 必须使用此端口
 - `tauri.conf.json` 中启用了 **`macOSPrivateApi: true`**，用于 macOS 半透明窗口效果
-- **边缘吸附**：浮动球靠近屏幕边缘时会部分隐藏（仅露出约 35px），悬停时触发"弹出"动画
+- **边缘吸附**：已移除。浮动球不再自动吸附到屏幕边缘
 - `tauri.conf.json` 中 **CSP 已禁用**（`"csp": null`）
 - `panel` 窗口（内嵌 `aidi.yadea.com.cn/aigc/` 的 iframe）通过 `open_panel` 命令动态创建，未在 `tauri.conf.json` 中预先声明

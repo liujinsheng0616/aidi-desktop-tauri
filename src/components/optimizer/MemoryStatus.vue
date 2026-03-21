@@ -29,7 +29,7 @@ async function handleOptimize() {
     optimizeResult.value = result as any
     await refreshMemory()
   } catch (e) {
-    console.error('Optimize failed:', e)
+    // 优化失败，忽略
   } finally {
     isOptimizing.value = false
   }

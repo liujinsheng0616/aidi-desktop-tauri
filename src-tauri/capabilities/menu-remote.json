@@ -1,14 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "menu-remote",
-  "description": "Capability for menu window loaded from remote URL",
+  "description": "Capability for menu and chat windows loaded from remote URL",
   "remote": {
     "urls": [
       "https://microsapptest.yadea.com.cn/*",
-      "https://aidi.yadea.com.cn/*"
+      "https://aidi.yadea.com.cn/*",
+      "http://127.0.0.1:5173/*",
+      "http://localhost:5173/*"
     ]
   },
-  "windows": ["menu"],
+  "windows": ["menu", "chat"],
   "permissions": [
     "core:default",
     "core:event:allow-emit",
