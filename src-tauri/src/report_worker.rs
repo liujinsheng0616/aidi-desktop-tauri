@@ -220,21 +220,13 @@ async fn fetch_remote_config() -> Result<RemoteConfig, String> {
 
 /// 判断是否需要上报
 fn should_report(local: &ReportConfig, remote: &RemoteConfig) -> bool {
-    println!("[ReportWorker] 本地配置: last_time={:?}, interval={}, version={}",
-             local.last_report_time, local.report_interval_days, local.config_version);
-    println!("[ReportWorker] 远程配置: force={}, interval={}, version={}",
-             remote.force_report, remote.default_interval_days, remote.config_version);
-
     // 条件1：远程配置的强制版本 > 本地版本（立即上报）
     if remote.force_report && remote.config_version > local.config_version as i32 {
-        println!("[ReportWorker] 触发上报：远程强制上报标志（版本 {} > {}）",
-                 remote.config_version, local.config_version);
         return true;
     }
 
     // 条件2：从未上报过
     if local.last_report_time.is_none() {
-        println!("[ReportWorker] 触发上报：从未上报过");
         return true;
     }
 
@@ -247,10 +239,7 @@ fn should_report(local: &ReportConfig, remote: &RemoteConfig) -> bool {
             let last_utc: DateTime<Utc> = last_time.with_timezone(&Utc);
             let now = Utc::now();
             let days = (now - last_utc).num_days();
-            println!("[ReportWorker] 距离上次上报 {} 天，间隔 {} 天", days, interval_days);
             if days >= interval_days as i64 {
-                println!("[ReportWorker] 触发上报：超过间隔天数（{} >= {}）",
-                         days, interval_days);
                 return true;
             }
         }
@@ -356,8 +345,6 @@ async fn report_device_info(
 
     let report_data = extract_report_data(system_info, user_code, user_name);
 
-    println!("[ReportWorker] 上报数据: {}", serde_json::to_string_pretty(&report_data).unwrap_or_default());
-
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
@@ -371,29 +358,22 @@ async fn report_device_info(
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
 
-    println!("[ReportWorker] 上报响应: {} - {}", status, body);
-
     if !status.is_success() {
         return Err(format!("上报设备信息失败: {} - {}", status, body));
     }
 
-    println!("[ReportWorker] 设备信息上报成功");
     Ok(())
 }
 
 /// 执行检查和上报
 async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
-    println!("[ReportWorker] 开始检查是否需要上报...");
-
     // 1. 检查是否已登录
     if get_auth_token().is_none() {
-        println!("[ReportWorker] 未登录，跳过上报检查");
         return Ok(());
     }
 
     let user_info = get_user_info();
     if user_info.is_none() {
-        println!("[ReportWorker] 无用户信息，跳过上报检查");
         return Ok(());
     }
     let (user_code, user_name) = user_info.unwrap();
@@ -404,14 +384,12 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
     // 3. 获取远程配置
     let remote_config = match fetch_remote_config().await {
         Ok(config) => config,
-        Err(e) => {
-            println!("[ReportWorker] 获取远程配置失败: {}，使用本地配置", e);
+        Err(_) => {
             // 如果无法获取远程配置，仅检查时间间隔
             if let Some(ref last) = local_config.last_report_time {
                 if let Ok(last_time) = DateTime::parse_from_rfc3339(last) {
                     let days = (Utc::now() - last_time.with_timezone(&Utc)).num_days();
                     if days < local_config.report_interval_days as i64 {
-                        println!("[ReportWorker] 距离上次上报 {} 天，未到间隔，跳过", days);
                         return Ok(());
                     }
                 }
@@ -427,16 +405,13 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
 
     // 4. 判断是否需要上报
     if !should_report(&local_config, &remote_config) {
-        println!("[ReportWorker] 不满足上报条件，跳过");
         return Ok(());
     }
 
     // 5. 采集系统信息
-    println!("[ReportWorker] 开始采集系统信息...");
     let system_info = run_system_info_script()?;
 
     // 6. 上报数据
-    println!("[ReportWorker] 开始上报设备信息...");
     report_device_info(&system_info, &user_code, &user_name).await?;
 
     // 7. 更新本地配置
@@ -447,14 +422,11 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
     };
     save_local_config(app, &updated);
 
-    println!("[ReportWorker] 上报流程完成");
     Ok(())
 }
 
 /// 启动后台上报守护线程
 pub fn start_report_worker(app: tauri::AppHandle) {
-    println!("[ReportWorker] 启动后台上报守护线程");
-
     // 使用 std::thread 创建独立的后台线程
     std::thread::spawn(move || {
         // 在线程内创建 Tokio runtime
@@ -467,9 +439,7 @@ pub fn start_report_worker(app: tauri::AppHandle) {
 
             loop {
                 // 执行检查和上报
-                if let Err(e) = check_and_report(&app).await {
-                    eprintln!("[ReportWorker] 检查/上报出错: {}", e);
-                }
+                let _ = check_and_report(&app).await;
 
                 // 休眠等待下次检查
                 tokio::time::sleep(Duration::from_secs(CHECK_INTERVAL_SECS)).await;

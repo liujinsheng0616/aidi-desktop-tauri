@@ -24,9 +24,6 @@ const savedHeight = ref(0) // 保存收起前的高度
 // 事件监听器清理函数
 let unlistenCollapse: UnlistenFn | null = null
 
-// IME 组合输入状态（e.isComposing 在 Tauri WebView 里不可靠）
-let imeComposing = false
-
 const ballSize = computed(() => props.size || 60)
 
 // 点击搜索按钮 - 展开/收起输入框
@@ -145,7 +142,11 @@ async function sendMessage() {
 
 // 按键处理
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey && !imeComposing) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    // keyCode === 229 表示 IME 正在组合输入，此时不处理
+    if (e.keyCode === 229) {
+      return
+    }
     e.preventDefault()
     sendMessage()
   } else if (e.key === 'Escape') {
@@ -207,8 +208,6 @@ onUnmounted(() => {
             rows="1"
             @keydown="handleKeydown"
             @input="autoResize"
-            @compositionstart="imeComposing = true"
-            @compositionend="() => setTimeout(() => { imeComposing = false }, 0)"
           />
         </div>
       </div>
