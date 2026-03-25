@@ -91,13 +91,10 @@ async fn fetch_remote_config() -> RemoteConfig {
         match client.get(REMOTE_CONFIG_URL).send().await {
             Ok(resp) => {
                 if let Ok(config) = resp.json::<RemoteConfig>().await {
-                    println!("[ReportWorker] 远程配置: enabled={}, interval_days={}", config.enabled, config.interval_days);
                     return config;
                 }
             }
-            Err(e) => {
-                println!("[ReportWorker] 获取远程配置失败: {}", e);
-            }
+            Err(_) => {}
         }
     }
 
@@ -250,7 +247,6 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
     // 2. 获取远程配置
     let remote_config = fetch_remote_config().await;
     if !remote_config.enabled {
-        println!("[ReportWorker] 远程配置已禁用上报");
         return Ok(());
     }
 
@@ -262,7 +258,6 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
         if let Ok(last_time) = DateTime::parse_from_rfc3339(last) {
             let days = (Utc::now() - last_time.with_timezone(&Utc)).num_days();
             if days < remote_config.interval_days as i64 {
-                println!("[ReportWorker] 未到上报时间: 距上次 {} 天，要求 {} 天", days, remote_config.interval_days);
                 return Ok(());
             }
         }
@@ -273,7 +268,6 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
 
     // 6. 上报数据到飞书多维表格
     report_device_info(&system_info, &user_code, &user_name).await?;
-    println!("[ReportWorker] ✅ 上报成功: {} - {}", user_name, user_code);
 
     // 7. 更新本地配置
     let updated = ReportConfig {
@@ -295,9 +289,7 @@ pub fn start_report_worker(app: tauri::AppHandle) {
             tokio::time::sleep(Duration::from_secs(30)).await;
 
             loop {
-                if let Err(e) = check_and_report(&app).await {
-                    println!("[ReportWorker] ❌ 上报失败: {}", e);
-                }
+                let _ = check_and_report(&app).await;
                 tokio::time::sleep(Duration::from_secs(CHECK_INTERVAL_SECS)).await;
             }
         });

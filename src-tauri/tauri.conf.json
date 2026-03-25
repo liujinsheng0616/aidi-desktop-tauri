@@ -30,7 +30,7 @@
         "x": 100,
         "y": 100,
         "acceptFirstMouse": true,
-        "devtools": true
+        "devtools": false
       },
       {
         "label": "optimizer",
@@ -46,7 +46,7 @@
         "resizable": false,
         "center": true,
         "visible": false,
-        "devtools": true
+        "devtools": false
       }
     ],
     "security": {

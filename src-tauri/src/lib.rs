@@ -262,11 +262,11 @@ unsafe extern "system" fn ball_window_proc(
 
 /// 设置窗口为透明矩形（悬浮球 + 搜索按钮并排布局）
 /// caller: 调用来源标识，用于诊断日志对比（如 "init", "on_blur", "after_menu", "show"）
-fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: &str) {
+#[allow(unused_variables)]
+fn apply_circular_window_mask(window: &tauri::WebviewWindow, _size: u32, _caller: &str) {
     #[cfg(target_os = "macos")]
     {
         // macOS: 不需要设置圆角，前端 CSS 处理
-        let _ = caller; // 抑制未使用警告
     }
 
     #[cfg(windows)]
@@ -323,11 +323,11 @@ fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: 
 
 /// 为无边框透明窗口应用 Windows 样式（无标题栏、无遮罩）
 /// 用于聊天窗口等矩形无边框窗口
-fn apply_borderless_window_style(window: &tauri::WebviewWindow, caller: &str) {
+#[allow(unused_variables)]
+fn apply_borderless_window_style(window: &tauri::WebviewWindow, _caller: &str) {
     #[cfg(target_os = "macos")]
     {
         // macOS: 不需要额外处理
-        let _ = caller; // 抑制未使用警告
     }
 
     #[cfg(windows)]
@@ -2791,8 +2791,8 @@ fn get_login_info() -> Result<Option<serde_json::Value>, String> {
 
 /// 前端调试日志（空实现，保留接口兼容）
 #[tauri::command]
-fn log_debug(message: String) {
-    println!("[Frontend] {}", message);
+fn log_debug(_message: String) {
+    // 生产环境不输出日志
 }
 
 /// 清除登录状态（删除 auth.json + 重置全局状态）
