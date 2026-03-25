@@ -73,7 +73,7 @@ jobs:
         if: "!contains(github.ref_name, '-test') && github.event.inputs.environment != 'test'"
         run: npx tauri build ${{ matrix.args }}
         env:
-          AIDI_ENV: production
+          AIDI_ENV: prod
 
       - name: Upload macOS artifacts (test)
         if: matrix.platform == 'macos-latest' && (contains(github.ref_name, '-test') || github.event.inputs.environment == 'test')
