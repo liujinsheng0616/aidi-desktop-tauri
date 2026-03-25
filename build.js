@@ -8,8 +8,13 @@ const mode = process.env.AIDI_ENV || 'production';
 console.log(`[build.js] AIDI_ENV=${process.env.AIDI_ENV}`);
 console.log(`[build.js] Building with mode: ${mode}`);
 
-// 读取环境变量文件
-const envFile = `.env.${mode}`;
+// 映射环境名称到配置文件
+const envFileMap = {
+  'prod': '.env.production',
+  'test': '.env.test',
+  'development': '.env.development'
+};
+const envFile = envFileMap[mode] || `.env.${mode}`;
 const envPath = resolve(__dirname, envFile);
 
 if (!existsSync(envPath)) {
