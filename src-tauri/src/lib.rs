@@ -33,12 +33,14 @@ fn ensure_ball_above_chat(app: &tauri::AppHandle) {
                 chat_window.hwnd()
             ) {
                 // 将聊天窗口放在悬浮球之后
-                let _ = SetWindowPos(
-                    HWND(chat_hwnd.0),
-                    Some(HWND(main_hwnd.0)),
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-                );
+                unsafe {
+                    let _ = SetWindowPos(
+                        HWND(chat_hwnd.0),
+                        Some(HWND(main_hwnd.0)),
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                    );
+                }
             }
         }
 
@@ -260,7 +262,7 @@ unsafe extern "system" fn ball_window_proc(
 
 /// 设置窗口为透明矩形（悬浮球 + 搜索按钮并排布局）
 /// caller: 调用来源标识，用于诊断日志对比（如 "init", "on_blur", "after_menu", "show"）
-fn apply_circular_window_mask(_window: &tauri::WebviewWindow, _size: u32, caller: &str) {
+fn apply_circular_window_mask(window: &tauri::WebviewWindow, size: u32, caller: &str) {
     #[cfg(target_os = "macos")]
     {
         // macOS: 不需要设置圆角，前端 CSS 处理
@@ -321,7 +323,7 @@ fn apply_circular_window_mask(_window: &tauri::WebviewWindow, _size: u32, caller
 
 /// 为无边框透明窗口应用 Windows 样式（无标题栏、无遮罩）
 /// 用于聊天窗口等矩形无边框窗口
-fn apply_borderless_window_style(_window: &tauri::WebviewWindow, caller: &str) {
+fn apply_borderless_window_style(window: &tauri::WebviewWindow, caller: &str) {
     #[cfg(target_os = "macos")]
     {
         // macOS: 不需要额外处理
