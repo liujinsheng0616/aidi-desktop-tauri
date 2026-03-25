@@ -3067,69 +3067,35 @@ pub fn run() {
 
             }
             // 注册全局快捷键：唤起聊天窗口
-            // Mac: Alt+Q, Windows: Alt+1
+            // 全局快捷键：Cmd+D (macOS) / Ctrl+D (Windows/Linux)
             // 容错处理：快捷键注册失败不应影响应用启动
             use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-            // 根据平台选择快捷键
-            #[cfg(target_os = "macos")]
-            let shortcut_str = "Alt+Q";
-            #[cfg(not(target_os = "macos"))]
-            let shortcut_str = "Alt+1";
+            // 全局快捷键：macOS 为 Cmd+D，Windows/Linux 为 Ctrl+D
+            let shortcut_str = "CommandOrControl+D";
 
             let shortcut: Shortcut = shortcut_str.parse().expect("invalid shortcut");
             if let Err(_) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
-                    // 确保悬浮球可见
+                    // 切换悬浮球显示/隐藏
                     if let Some(window) = app.webview_windows().get("main") {
                         let visible = BALL_VISIBLE.load(Ordering::SeqCst);
-                        if !visible {
+                        if visible {
+                            // 当前可见 → 隐藏
+                            let _ = window.hide();
+                            BALL_VISIBLE.store(false, Ordering::SeqCst);
+                            sync_toggle_menu_item(app, false);
+                        } else {
+                            // 当前隐藏 → 显示
                             let _ = window.show();
                             BALL_VISIBLE.store(true, Ordering::SeqCst);
                             sync_toggle_menu_item(app, true);
                             // 应用窗口样式
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                             let full_size = ball_size_val + BALL_PADDING * 2;
-                            apply_circular_window_mask(window, full_size, "shortcut_chat");
+                            apply_circular_window_mask(window, full_size, "shortcut_toggle");
                         }
                     }
-
-                    // 显示聊天窗口
-                    let app_clone = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        // 获取或创建聊天窗口
-                        if let Some(chat_window) = app_clone.webview_windows().get("chat") {
-                            // 更新窗口位置到悬浮球下方
-                            if let Some(main_window) = app_clone.webview_windows().get("main") {
-                                if let Ok(ball_pos) = main_window.outer_position() {
-                                    if let Ok(ball_size) = main_window.outer_size() {
-                                        if let Ok(chat_size) = chat_window.outer_size() {
-                                            // 聊天窗口与悬浮球窗口居中对齐
-                                            let ball_center = ball_pos.x + ball_size.width as i32 / 2;
-                                            let chat_x = ball_center - chat_size.width as i32 / 2;
-                                            let chat_y = ball_pos.y + ball_size.height as i32;
-                                            let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
-                                                x: chat_x,
-                                                y: chat_y,
-                                            }));
-                                        }
-                                    }
-                                }
-                            }
-                            let _ = chat_window.show();
-                            let _ = chat_window.set_focus();
-                        } else {
-                            // 创建新窗口
-                            match create_chat_window(&app_clone, None) {
-                                Ok(w) => {
-                                    let _ = w.show();
-                                    let _ = w.set_focus();
-                                }
-                                Err(_) => {
-                                }
-                            }
-                        }
-                    });
                 }
             }) {
             } else {
