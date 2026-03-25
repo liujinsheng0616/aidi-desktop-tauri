@@ -4,6 +4,7 @@
 #![allow(deprecated)]
 
 mod report_worker;
+mod feishu;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -2270,12 +2271,6 @@ fn update_settings(app: tauri::AppHandle, settings: Settings) {
     let _ = app.emit("settings-updated", settings);
 }
 
-/// 设置上报认证 Token（供前端调用）
-#[tauri::command]
-fn set_auth_token(token: String) {
-    report_worker::set_auth_token(token);
-}
-
 /// 设置上报用户信息（供前端调用）
 #[tauri::command]
 fn set_report_user_info(user_code: String, user_name: String) {
@@ -2753,12 +2748,16 @@ fn save_login_info(token: String, user_id: String, user_name: String, user_json:
             return Err(format!("创建目录失败: {}", e));
         }
 
+        // 解析 user_json 字符串为 JSON 对象，避免双重转义
+        let user_value: serde_json::Value = serde_json::from_str(&user_json)
+            .unwrap_or_else(|_| serde_json::json!(user_json));
+
         let auth_file = aidi_dir.join("auth.json");
         let content = serde_json::json!({
             "token": token,
             "userId": user_id,
             "userName": user_name,
-            "user": user_json,
+            "user": user_value,
             "updatedAt": chrono::Local::now().to_rfc3339(),
         });
 
@@ -2772,9 +2771,51 @@ fn save_login_info(token: String, user_id: String, user_name: String, user_json:
     Ok(())
 }
 
+/// 读取本地登录信息
+#[tauri::command]
+fn get_login_info() -> Result<Option<serde_json::Value>, String> {
+    if let Some(data_dir) = dirs::data_local_dir() {
+        let auth_file = data_dir.join("AIDI Desktop").join("auth.json");
+        if auth_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&auth_file) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    return Ok(Some(json));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// 前端调试日志（空实现，保留接口兼容）
 #[tauri::command]
-fn log_debug(_message: String) {
+fn log_debug(message: String) {
+    println!("[Frontend] {}", message);
+}
+
+/// 清除登录状态（删除 auth.json + 重置全局状态）
+#[tauri::command]
+fn clear_login_state(app: tauri::AppHandle) -> Result<(), String> {
+    // 1. 删除 auth.json 文件
+    if let Some(data_dir) = dirs::data_local_dir() {
+        let auth_file = data_dir.join("AIDI Desktop").join("auth.json");
+        if auth_file.exists() {
+            if let Err(e) = std::fs::remove_file(&auth_file) {
+                return Err(format!("删除登录文件失败: {}", e));
+            }
+        }
+    }
+
+    // 2. 重置全局登录状态
+    IS_LOGGED_IN.store(false, Ordering::SeqCst);
+
+    // 3. 清除上报线程的用户信息
+    report_worker::set_user_info(String::new(), String::new());
+
+    // 4. 更新托盘菜单
+    rebuild_tray_menu(&app, false, false);
+
+    Ok(())
 }
 
 // ==================== MAIN ENTRY POINT ====================
@@ -3135,7 +3176,6 @@ pub fn run() {
             show_submenu,
             hide_submenu,
             update_settings,
-            set_auth_token,
             set_report_user_info,
             trigger_report,
             update_window_size,
@@ -3168,6 +3208,8 @@ pub fn run() {
             on_login_success,
             log_debug,
             save_login_info,
+            get_login_info,
+            clear_login_state,
             diagnose_window,
             show_chat_window,
             hide_chat_window,
@@ -3176,6 +3218,8 @@ pub fn run() {
             update_chat_window_position,
             resize_chat_window,
             reset_chat_window_size,
+            feishu::auth::feishu_login,
+            feishu::bitable::feishu_report_device,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

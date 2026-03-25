@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link'
-import { fetchUserIdByCode, fetchTokenByUserId, fetchCurrentUser, setToken, setUser } from '../stores/auth'
+import { feishuLogin, convertFeishuUser, setUser, type FeishuUserInfo } from '../stores/auth'
 
 type Status = 'qr' | 'processing' | 'success' | 'error'
 
@@ -30,27 +30,22 @@ async function handleCode(code: string) {
   await log(`[Login] handleCode start, code=${code.substring(0, 15)}`)
   status.value = 'processing'
   try {
-    await log('[Login] fetchUserIdByCode...')
-    const userId = await fetchUserIdByCode(code)
-    await log(`[Login] userId=${userId}`)
+    // 新流程：直接通过 Rust 调用飞书 API 获取用户信息
+    await log('[Login] feishuLogin (Rust direct API)...')
+    const feishuUser: FeishuUserInfo = await feishuLogin(code)
+    await log(`[Login] feishuUser=${JSON.stringify(feishuUser).substring(0, 100)}`)
 
-    await log('[Login] fetchTokenByUserId...')
-    const token = await fetchTokenByUserId(userId)
-    await log(`[Login] token=${token.substring(0, 10)}...`)
-
-    setToken(token)
-
-    await log('[Login] fetchCurrentUser...')
-    const user = await fetchCurrentUser(token)
-    await log(`[Login] user=${JSON.stringify(user).substring(0, 60)}`)
+    // 转换为内部用户格式
+    const user = convertFeishuUser(feishuUser)
+    await log(`[Login] converted user=${JSON.stringify(user).substring(0, 100)}`)
 
     setUser(user)
     status.value = 'success'
 
-    // 保存登录信息（Windows invoke 可能失败，try/catch 包裹）
+    // 保存登录信息到本地文件
     try {
       await invoke('save_login_info', {
-        token,
+        token: '',  // 新流程不再使用 token
         userId: user.id,
         userName: user.name,
         userJson: JSON.stringify(user)
@@ -61,10 +56,8 @@ async function handleCode(code: string) {
     }
 
     // 通过 URL 导航触发 Rust on_navigation 兜底（兼容 Windows/WebView2）
-    // 注意：about:blank 在 WebView2 上不触发 NavigationStarting，必须用同 origin 的 HTTPS URL
-    const encodedToken = encodeURIComponent(token)
     const encodedUser = encodeURIComponent(JSON.stringify(user))
-    const triggerUrl = `${window.location.origin}/aidi-login-success#invoke=login-success&token=${encodedToken}&user=${encodedUser}`
+    const triggerUrl = `${window.location.origin}/aidi-login-success#invoke=login-success&user=${encodedUser}`
     await log(`[Login] navigating: ${triggerUrl.substring(0, 80)}`)
     window.location.href = triggerUrl
 

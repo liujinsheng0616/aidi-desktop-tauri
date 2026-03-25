@@ -227,7 +227,7 @@ async function handleMouseUp() {
           webview.once('tauri://created', () => {
             // 窗口创建成功
           })
-          webview.once('tauri://error', (e) => {
+          webview.once('tauri://error', () => {
             // 窗口创建失败，忽略
           })
         }

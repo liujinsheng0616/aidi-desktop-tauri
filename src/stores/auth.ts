@@ -12,6 +12,20 @@ export interface UserInfo {
   fsUserId: string | null
 }
 
+// 飞书用户信息（新版登录接口返回，camelCase 格式）
+export interface FeishuUserInfo {
+  unionId: string | null
+  userId: string | null
+  openId: string | null
+  name: string | null
+  email: string | null
+  mobile: string | null
+  gender: number | null
+  jobNumber: string | null
+  position: string | null
+  accessToken: string | null
+}
+
 // 写入 Rust 日志文件
 async function logAuth(message: string) {
   try {
@@ -19,6 +33,45 @@ async function logAuth(message: string) {
     await invoke('log_debug', { message: `[Auth] ${message}` })
   } catch {}
 }
+
+// ========== 新版飞书登录（Rust 后端直接调用飞书 API）==========
+
+/**
+ * 新版登录：code → 飞书用户信息
+ * Rust 后端直接调用飞书开放平台 API，不依赖 Java 服务
+ */
+export async function feishuLogin(code: string): Promise<FeishuUserInfo> {
+  const { invoke } = await import('@tauri-apps/api/core')
+
+  logAuth(`feishuLogin 开始: code=${code.substring(0, 10)}...`)
+
+  try {
+    const userInfo = await invoke<FeishuUserInfo>('feishu_login', { code })
+    logAuth(`feishuLogin 成功: ${JSON.stringify(userInfo)}`)
+    return userInfo
+  } catch (error) {
+    logAuth(`feishuLogin 失败: ${error}`)
+    throw new Error(`登录失败: ${error}`)
+  }
+}
+
+/**
+ * 将飞书用户信息转换为内部 UserInfo 格式
+ */
+export function convertFeishuUser(feishuUser: FeishuUserInfo): UserInfo {
+  return {
+    id: feishuUser.userId || feishuUser.openId || '',
+    name: feishuUser.name || '',
+    nickName: feishuUser.name || '',
+    headImgUrl: '',
+    mobile: feishuUser.mobile || '',
+    username: feishuUser.email || feishuUser.jobNumber || '',
+    type: 'feishu',
+    fsUserId: feishuUser.jobNumber,  // 使用员工工号
+  }
+}
+
+// ========== 旧版登录（保留兼容，后续可删除）==========
 
 // 接口1：code → userId
 export async function fetchUserIdByCode(code: string): Promise<string> {
@@ -148,11 +201,23 @@ export const getUser = (): UserInfo | null => {
   return raw ? JSON.parse(raw) : null
 }
 export const setUser = (user: UserInfo) => localStorage.setItem(USER_KEY, JSON.stringify(user))
-export const clearAuth = () => {
+
+/// 彻底清除登录状态（localStorage + Rust 端 auth.json）
+export async function clearAuth() {
+  // 清除 localStorage
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+
+  // 清除 Rust 端的 auth.json 并重置全局状态
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('clear_login_state')
+  } catch (e) {
+    console.warn('清除 Rust 端登录状态失败:', e)
+  }
 }
-export const isLoggedIn = () => !!getToken()
+// 新流程不再使用 token，改为检查用户信息
+export const isLoggedIn = () => !!getUser()
 
 export function buildFeishuOAuthUrl(): string {
   const appId = import.meta.env.VITE_FS_APPID

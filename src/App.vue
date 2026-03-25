@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import FloatingBall from './components/FloatingBall.vue'
 import QuickInputBox from './components/QuickInputBox.vue'
-import { isLoggedIn, getToken, fetchCurrentUser, setUser, getUser } from './stores/auth'
+import { isLoggedIn, getUser, clearAuth } from './stores/auth'
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
 import { colorThemes } from './shared/colorThemes'
 
@@ -85,13 +85,10 @@ if (typeof window !== 'undefined') {
 
 /** 同步认证信息到 Rust 后端（用于后台静默上报） */
 async function syncAuthToBackend() {
-  const token = getToken()
   const user = getUser()
-  if (token && user) {
+  if (user) {
     try {
-      // 同步 token
-      await invoke('set_auth_token', { token })
-      // 同步用户信息（userCode 使用 fsUserId）
+      // 同步用户信息到 Rust 端（用于设备上报）
       await invoke('set_report_user_info', {
         userCode: user.fsUserId || user.id,
         userName: user.name || user.nickName
@@ -104,22 +101,39 @@ async function syncAuthToBackend() {
 
 async function initApp() {
   loadSettings()
-  // 每次启动悬浮球时刷新用户信息缓存，失败不阻断启动
-  const token = getToken()
-  if (token) {
-    fetchCurrentUser(token).then(async (user) => {
-      setUser(user)
-      // 同步认证信息到 Rust 后端
-      await syncAuthToBackend()
-    }).catch(() => {})
-  }
+  // 同步用户信息到 Rust 后端（用于设备上报）
+  await syncAuthToBackend()
   // 先同步窗口大小，消除 tauri.conf.json 初始 120×120 与 ballSize 的不一致
   await invoke('update_window_size', { size: ballSize.value })
   initialized.value = true
   await invoke('show_main_window')
 }
 
+// 监听 localStorage 变化（跨标签页同步或手动删除时触发）
+async function handleStorageChange(e: StorageEvent) {
+  if (e.key === 'aidi-user' && !e.newValue && isLoggedIn()) {
+    // aidi-user 被删除，彻底清除登录状态并显示登录窗口
+    await clearAuth()
+    await invoke('show_login_window')
+  }
+}
+
+// 暴露全局登出函数（可在控制台调用：await __aidiLogout()）
+async function globalLogout() {
+  await clearAuth()
+  await invoke('show_login_window')
+  console.log('已登出，显示登录窗口')
+}
+
+// 暴露全局函数供 Rust 或控制台调用
+if (typeof window !== 'undefined') {
+  (window as any).__aidiLogout = globalLogout
+}
+
 onMounted(async () => {
+  // 监听存储变化
+  window.addEventListener('storage', handleStorageChange)
+
   listen('settings-updated', (event: any) => {
     const settings = event.payload as any
     // Handle both camelCase (from localStorage) and snake_case (from backend)
@@ -165,7 +179,7 @@ onMounted(async () => {
         alwaysOnTop: false,
       })
       webview.once('tauri://created', () => { isCreatingAigcWindow = false })
-      webview.once('tauri://error', (e) => {
+      webview.once('tauri://error', () => {
         isCreatingAigcWindow = false
       })
     }
@@ -183,6 +197,27 @@ onMounted(async () => {
     }
   })
 
+  // 从 Rust 端读取持久化的登录信息，恢复到 localStorage
+  try {
+    const loginInfo = await invoke<{ user: string | Record<string, unknown> | null } | null>('get_login_info')
+    if (loginInfo?.user) {
+      let user: Record<string, unknown> | null = null
+      if (typeof loginInfo.user === 'string') {
+        // 防止 "[object Object]" 这样的无效字符串
+        if (loginInfo.user.startsWith('{') || loginInfo.user.startsWith('[')) {
+          user = JSON.parse(loginInfo.user)
+        }
+      } else if (typeof loginInfo.user === 'object') {
+        user = loginInfo.user as Record<string, unknown>
+      }
+      if (user && user.id) {
+        localStorage.setItem('aidi-user', JSON.stringify(user))
+      }
+    }
+  } catch (e) {
+    console.warn('读取登录信息失败:', e)
+  }
+
   const loggedIn = isLoggedIn()
   // 应用启动时同步登录状态到 Rust 端（用于托盘菜单显示）
   await invoke('update_login_status', { isLoggedIn: loggedIn })
@@ -196,6 +231,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unlistenOpenAigc?.()
+  window.removeEventListener('storage', handleStorageChange)
 })
 </script>
 

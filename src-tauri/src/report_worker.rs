@@ -1,9 +1,9 @@
 //! 设备信息上报守护线程模块
 //!
 //! 提供后台静默上报功能：
-//! - 定期检查是否需要上报（每天一次）
-//! - 判断条件：超过间隔天数 或 远程配置的强制上报标志
-//! - 自动采集系统信息并上报到后端
+//! - 定期检查是否需要上报（每 24 小时）
+//! - 自动采集系统信息并上报到飞书多维表格
+//! - 从远程配置获取上报间隔
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -13,21 +13,37 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-/// 检查间隔（秒）：每 24 小时检查一次
-/// 测试时改为 60 秒快速验证
-const CHECK_INTERVAL_SECS: u64 = 60;
+use crate::feishu::bitable::report_device;
+use crate::feishu::types::DeviceReportRequest;
 
-/// 默认上报间隔天数
+/// 检查间隔（秒）：每 24 小时检查一次
+const CHECK_INTERVAL_SECS: u64 = 86400;
+
+/// 默认上报间隔天数（30天）
 const DEFAULT_INTERVAL_DAYS: u32 = 30;
+
+/// 远程配置地址
+const REMOTE_CONFIG_URL: &str = "https://oss.yadea.com.cn/aigc/aidi-report.json";
 
 /// 本地配置文件名
 const CONFIG_FILE_NAME: &str = "report_config.json";
 
-/// 认证 Token（由前端设置）
-static AUTH_TOKEN: Mutex<Option<String>> = Mutex::new(None);
-
-/// 用户信息（从本地存储获取）
+/// 用户信息（从登录获取）
 static USER_INFO: Mutex<Option<(String, String)>> = Mutex::new(None); // (userCode, userName)
+
+/// 远程配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RemoteConfig {
+    /// 是否启用上报
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// 上报间隔天数
+    #[serde(default = "default_interval_days")]
+    pub interval_days: u32,
+}
+
+fn default_enabled() -> bool { true }
+fn default_interval_days() -> u32 { 30 }
 
 /// 本地上报配置
 #[derive(Serialize, Deserialize, Clone)]
@@ -36,8 +52,6 @@ pub struct ReportConfig {
     pub last_report_time: Option<String>,
     /// 上报间隔天数
     pub report_interval_days: u32,
-    /// 远程配置版本号
-    pub config_version: u32,
 }
 
 impl Default for ReportConfig {
@@ -45,74 +59,13 @@ impl Default for ReportConfig {
         Self {
             last_report_time: None,
             report_interval_days: DEFAULT_INTERVAL_DAYS,
-            config_version: 0,
         }
     }
 }
 
-/// 远程配置响应
-#[derive(Deserialize)]
-struct RemoteConfig {
-    #[serde(rename = "forceReport")]
-    force_report: bool,
-    #[serde(rename = "configVersion")]
-    config_version: i32,
-    #[serde(rename = "defaultIntervalDays")]
-    default_interval_days: i32,
-}
-
-/// 设备信息上报请求体
-#[derive(Serialize)]
-struct DeviceReportRequest {
-    #[serde(rename = "userCode")]
-    user_code: String,
-    #[serde(rename = "userName")]
-    user_name: String,
-    hostname: String,
-    ip: String,
-    manufacturer: String,
-    model: String,
-    #[serde(rename = "serialNumber")]
-    serial_number: String,
-    #[serde(rename = "manufactureDate")]
-    manufacture_date: String,
-    #[serde(rename = "osName")]
-    os_name: String,
-    #[serde(rename = "osVersion")]
-    os_version: String,
-    #[serde(rename = "osArch")]
-    os_arch: String,
-    #[serde(rename = "osInstallDate")]
-    os_install_date: String,
-    #[serde(rename = "osLastBoot")]
-    os_last_boot: String,
-    #[serde(rename = "cpuName")]
-    cpu_name: String,
-    #[serde(rename = "cpuCores")]
-    cpu_cores: i32,
-    #[serde(rename = "memoryGb")]
-    memory_gb: f64,
-    #[serde(rename = "storageGb")]
-    storage_gb: f64,
-    #[serde(rename = "gpuName")]
-    gpu_name: String,
-}
-
-/// 安全地获取锁（处理 poisoned mutex）
+/// 安全地获取锁
 fn safe_lock<T>(mutex: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
     mutex.lock().ok()
-}
-
-/// 设置认证 Token（由前端调用）
-pub fn set_auth_token(token: String) {
-    if let Some(mut auth_token) = safe_lock(&AUTH_TOKEN) {
-        *auth_token = Some(token);
-    }
-}
-
-/// 获取认证 Token
-fn get_auth_token() -> Option<String> {
-    safe_lock(&AUTH_TOKEN).and_then(|auth_token| auth_token.clone())
 }
 
 /// 设置用户信息（由前端调用）
@@ -125,6 +78,30 @@ pub fn set_user_info(user_code: String, user_name: String) {
 /// 获取用户信息
 fn get_user_info() -> Option<(String, String)> {
     safe_lock(&USER_INFO).and_then(|user_info| user_info.clone())
+}
+
+/// 获取远程配置
+async fn fetch_remote_config() -> RemoteConfig {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok();
+
+    if let Some(client) = client {
+        match client.get(REMOTE_CONFIG_URL).send().await {
+            Ok(resp) => {
+                if let Ok(config) = resp.json::<RemoteConfig>().await {
+                    println!("[ReportWorker] 远程配置: enabled={}, interval_days={}", config.enabled, config.interval_days);
+                    return config;
+                }
+            }
+            Err(e) => {
+                println!("[ReportWorker] 获取远程配置失败: {}", e);
+            }
+        }
+    }
+
+    RemoteConfig::default()
 }
 
 /// 获取配置文件路径
@@ -163,89 +140,6 @@ fn save_local_config(app: &tauri::AppHandle, config: &ReportConfig) {
     if let Ok(content) = serde_json::to_string_pretty(config) {
         let _ = std::fs::write(&path, content);
     }
-}
-
-/// 获取 API 基础 URL
-fn get_api_base_url() -> String {
-    // 优先读取环境变量
-    if let Ok(url) = std::env::var("AIDI_API_URL") {
-        return url;
-    }
-
-    // 通过环境变量 AIDI_ENV 决定使用哪个环境
-    let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "dev".to_string());
-
-    match env.as_str() {
-        "test" => "https://microsapitest.yadea.com.cn".to_string(),
-        "prod" => "https://aidi.yadea.com.cn".to_string(),
-        _ => "http://127.0.0.1:9900".to_string(), // 开发环境默认后端地址
-    }
-}
-
-/// 获取远程配置
-async fn fetch_remote_config() -> Result<RemoteConfig, String> {
-    let token = get_auth_token().ok_or("未登录，无法获取远程配置")?;
-
-    let base_url = get_api_base_url();
-    let url = format!("{}/api-aigc/device/info/config", base_url);
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|e| format!("请求远程配置失败: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("远程配置接口返回错误: {}", response.status()));
-    }
-
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("解析远程配置响应失败: {}", e))?;
-
-    // 解析响应结构：{ "resp_code": 0, "data": { ... } }
-    let data = json
-        .get("data")
-        .ok_or("远程配置响应缺少 data 字段")?;
-
-    let config: RemoteConfig = serde_json::from_value(data.clone())
-        .map_err(|e| format!("解析远程配置失败: {}", e))?;
-
-    Ok(config)
-}
-
-/// 判断是否需要上报
-fn should_report(local: &ReportConfig, remote: &RemoteConfig) -> bool {
-    // 条件1：远程配置的强制版本 > 本地版本（立即上报）
-    if remote.force_report && remote.config_version > local.config_version as i32 {
-        return true;
-    }
-
-    // 条件2：从未上报过
-    if local.last_report_time.is_none() {
-        return true;
-    }
-
-    // 条件3：距离上次上报 >= 间隔天数
-    // 远程配置优先，如果远程配置为0则表示每次都上报
-    let interval_days = remote.default_interval_days.max(0) as u32;
-
-    if let Some(ref last) = local.last_report_time {
-        if let Ok(last_time) = DateTime::parse_from_rfc3339(last) {
-            let last_utc: DateTime<Utc> = last_time.with_timezone(&Utc);
-            let now = Utc::now();
-            let days = (now - last_utc).num_days();
-            if days >= interval_days as i64 {
-                return true;
-            }
-        }
-    }
-
-    false
 }
 
 /// 执行系统信息采集脚本
@@ -329,96 +223,62 @@ fn extract_report_data(system_info: &serde_json::Value, user_code: &str, user_na
         memory_gb: memory.get("totalGB").and_then(|v| v.as_f64()).unwrap_or(0.0),
         storage_gb: storage.get("totalGB").and_then(|v| v.as_f64()).unwrap_or(0.0),
         gpu_name: gpu.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
 
-/// 上报设备信息
+/// 上报设备信息到飞书多维表格
 async fn report_device_info(
     system_info: &serde_json::Value,
     user_code: &str,
     user_name: &str,
 ) -> Result<(), String> {
-    let token = get_auth_token().ok_or("未登录，无法上报设备信息")?;
-
-    let base_url = get_api_base_url();
-    let url = format!("{}/api-aigc/device/info/report", base_url);
-
     let report_data = extract_report_data(system_info, user_code, user_name);
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&report_data)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| format!("上报设备信息失败: {}", e))?;
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-
-    if !status.is_success() {
-        return Err(format!("上报设备信息失败: {} - {}", status, body));
-    }
-
+    report_device(&report_data).await?;
     Ok(())
 }
 
 /// 执行检查和上报
 async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
-    // 1. 检查是否已登录
-    if get_auth_token().is_none() {
-        return Ok(());
-    }
-
+    // 1. 检查是否有用户信息
     let user_info = get_user_info();
     if user_info.is_none() {
         return Ok(());
     }
     let (user_code, user_name) = user_info.unwrap();
 
-    // 2. 读取本地配置
+    // 2. 获取远程配置
+    let remote_config = fetch_remote_config().await;
+    if !remote_config.enabled {
+        println!("[ReportWorker] 远程配置已禁用上报");
+        return Ok(());
+    }
+
+    // 3. 读取本地配置
     let local_config = read_local_config(app);
 
-    // 3. 获取远程配置
-    let remote_config = match fetch_remote_config().await {
-        Ok(config) => config,
-        Err(_) => {
-            // 如果无法获取远程配置，仅检查时间间隔
-            if let Some(ref last) = local_config.last_report_time {
-                if let Ok(last_time) = DateTime::parse_from_rfc3339(last) {
-                    let days = (Utc::now() - last_time.with_timezone(&Utc)).num_days();
-                    if days < local_config.report_interval_days as i64 {
-                        return Ok(());
-                    }
-                }
-            }
-            // 创建一个默认的远程配置
-            RemoteConfig {
-                force_report: false,
-                config_version: local_config.config_version as i32,
-                default_interval_days: local_config.report_interval_days as i32,
+    // 4. 检查时间间隔（使用远程配置的间隔）
+    if let Some(ref last) = local_config.last_report_time {
+        if let Ok(last_time) = DateTime::parse_from_rfc3339(last) {
+            let days = (Utc::now() - last_time.with_timezone(&Utc)).num_days();
+            if days < remote_config.interval_days as i64 {
+                println!("[ReportWorker] 未到上报时间: 距上次 {} 天，要求 {} 天", days, remote_config.interval_days);
+                return Ok(());
             }
         }
-    };
-
-    // 4. 判断是否需要上报
-    if !should_report(&local_config, &remote_config) {
-        return Ok(());
     }
 
     // 5. 采集系统信息
     let system_info = run_system_info_script()?;
 
-    // 6. 上报数据
+    // 6. 上报数据到飞书多维表格
     report_device_info(&system_info, &user_code, &user_name).await?;
+    println!("[ReportWorker] ✅ 上报成功: {} - {}", user_name, user_code);
 
     // 7. 更新本地配置
     let updated = ReportConfig {
         last_report_time: Some(Utc::now().to_rfc3339()),
-        report_interval_days: remote_config.default_interval_days as u32,
-        config_version: remote_config.config_version as u32,
+        report_interval_days: remote_config.interval_days,
     };
     save_local_config(app, &updated);
 
@@ -427,21 +287,17 @@ async fn check_and_report(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// 启动后台上报守护线程
 pub fn start_report_worker(app: tauri::AppHandle) {
-    // 使用 std::thread 创建独立的后台线程
     std::thread::spawn(move || {
-        // 在线程内创建 Tokio runtime
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
         rt.block_on(async {
-            // 启动时等待一段时间，让前端完成初始化
-            // 测试时改为 5 秒快速验证
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // 启动时等待 30 秒，让前端完成初始化
+            tokio::time::sleep(Duration::from_secs(30)).await;
 
             loop {
-                // 执行检查和上报
-                let _ = check_and_report(&app).await;
-
-                // 休眠等待下次检查
+                if let Err(e) = check_and_report(&app).await {
+                    println!("[ReportWorker] ❌ 上报失败: {}", e);
+                }
                 tokio::time::sleep(Duration::from_secs(CHECK_INTERVAL_SECS)).await;
             }
         });
