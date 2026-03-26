@@ -66,9 +66,7 @@
     ],
     "resources": ["scripts/*", "icons/tray-icon.png"],
     "macOS": {
-      "infoPlist": {
-        "NSAppleMusicUsageDescription": "AIDI 全局快捷键请求授权"
-      }
+      "infoPlist": "Info.plist"
     }
   },
   "plugins": {
