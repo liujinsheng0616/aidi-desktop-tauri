@@ -16,14 +16,37 @@ for interface in en0 en1 en2 en3; do
     fi
 done
 
-# Get marketing name
-marketing_name=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Model Name" | cut -d: -f2 | xargs)
+# Get marketing name：从 CoreTypes bundle 的 UTI 解析，无需 system_profiler
+marketing_name=""
+bundles_dir="/System/Library/CoreServices/CoreTypes.bundle/Contents/Library"
+if [ -d "$bundles_dir" ]; then
+    _matched_bundle=$(grep -rl "<string>${model}" "$bundles_dir" 2>/dev/null | head -1)
+    if [ -n "$_matched_bundle" ]; then
+        _uti=$(grep -o 'com\.apple\.[a-z0-9-]*20[0-9][0-9][a-z0-9-]*' "$_matched_bundle" 2>/dev/null | head -1)
+        # com.apple.macbookpro-14-2025 -> MacBook Pro
+        if echo "$_uti" | grep -qi "macbookpro"; then
+            marketing_name="MacBook Pro"
+        elif echo "$_uti" | grep -qi "macbookair"; then
+            marketing_name="MacBook Air"
+        elif echo "$_uti" | grep -qi "macbook"; then
+            marketing_name="MacBook"
+        elif echo "$_uti" | grep -qi "macpro"; then
+            marketing_name="Mac Pro"
+        elif echo "$_uti" | grep -qi "macmini"; then
+            marketing_name="Mac mini"
+        elif echo "$_uti" | grep -qi "imac"; then
+            marketing_name="iMac"
+        elif echo "$_uti" | grep -qi "macstudio"; then
+            marketing_name="Mac Studio"
+        fi
+    fi
+fi
 if [ -z "$marketing_name" ]; then
     marketing_name="$model"
 fi
 
-# Serial number
-serial_number=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | cut -d: -f2 | xargs)
+# Serial number（用 ioreg 替代 system_profiler）
+serial_number=$(ioreg -r -d 1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/"IOPlatformSerialNumber"/{print $4; exit}')
 if [ -z "$serial_number" ]; then
     serial_number="Unknown"
 fi
@@ -96,7 +119,11 @@ if [ -z "$gpu_name" ]; then
         gpu_name="Integrated Graphics"
     fi
 fi
-resolution=$(system_profiler SPDisplaysDataType --detailLevel mini 2>/dev/null | grep "Resolution" | head -1 | cut -d: -f2 | xargs)
+# 分辨率：从 ioreg 读取内置屏幕信息，完全避免 system_profiler
+resolution=$(ioreg -r -d 3 -c AppleBacklightDisplay 2>/dev/null | awk -F'"' '/"DisplayProductName"/{name=$4} END{print name}')
+if [ -z "$resolution" ]; then
+    resolution=$(ioreg -r -d 3 -c IODisplayConnect 2>/dev/null | grep -o '"[0-9]*" = [0-9]*' | head -1)
+fi
 
 # Storage
 total_storage=0
