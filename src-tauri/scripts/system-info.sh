@@ -28,57 +28,32 @@ if [ -z "$serial_number" ]; then
     serial_number="Unknown"
 fi
 
-# Manufacture date - from CoreTypes UTI using plutil
+# Manufacture date - 动态从 CoreTypes bundle 中按当前机型查找 UTI
 manufacture_date="Unknown"
 
 model=$(sysctl -n hw.model)
+bundles_dir="/System/Library/CoreServices/CoreTypes.bundle/Contents/Library"
 
-# Map model to CoreTypes bundle (Mac15,7 is in 0013)
-case "$model" in
-    Mac15,*) bundle_num="0013" ;;
-    Mac16,*) bundle_num="0025" ;;
-    Mac14,*) bundle_num="0011" ;;
-    Mac13,*) bundle_num="0009" ;;
-    Mac12,*) bundle_num="0006" ;;
-    *) bundle_num="0013" ;;
-esac
-
-plist_path="/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/CoreTypes-${bundle_num}.bundle/Contents/Info.plist"
-
-if [ -f "$plist_path" ]; then
-    # Use plutil to find UTI (more reliable than PlistBuddy grep)
-    # Find UTI containing model code
-    uti=$(plutil -p "$plist_path" 2>/dev/null | grep "macbookpro-16-late-2023-2" | head -1 | \
-        sed -E 's/.*"macbookpro-16-late-2023-2".*/com.apple.macbookpro-16-late-2023-2/')
-
-    # Fallback to any late-2023 entry
-    if [ -z "$uti" ]; then
-        uti=$(plutil -p "$plist_path" 2>/dev/null | grep "late-2023" | head -1 | \
-            sed -E 's/.*"([^"]+late-2023[^"]*)".*/\1/')
+# 在所有 bundle 中搜索包含当前机型标识符的 plist
+uti=""
+if [ -d "$bundles_dir" ]; then
+    matched=$(grep -rl "<string>${model}" "$bundles_dir" 2>/dev/null | head -1)
+    if [ -n "$matched" ]; then
+        # 从匹配的 plist 中找对应的 UTI（取包含年份的那行）
+        uti=$(grep -A5 "<string>${model}</string>" "$matched" 2>/dev/null | \
+            grep -o 'com\.apple\.[a-z0-9-]*20[0-9][0-9][a-z0-9-]*' | head -1)
+        # 兜底：直接从文件中找含年份的 UTI
+        if [ -z "$uti" ]; then
+            uti=$(grep -o 'com\.apple\.[a-z0-9-]*20[0-9][0-9][a-z0-9-]*' "$matched" 2>/dev/null | head -1)
+        fi
     fi
+fi
 
-    if [ -n "$uti" ]; then
-        # Parse year from UTI (e.g., late-2023 -> 2023)
-        year=$(echo "$uti" | grep -o 'late-20[0-9][0-9]' | grep -o '20[0-9][0-9]')
-
-        # Parse suffix (e.g., -2)
-        # Based on Apple release patterns for late-2023:
-        # -1 = Oct, -2 = Nov, -space-black = Nov (black)
-        # -silver = Nov (silver)
-        if echo "$uti" | grep -q '\-1\b'; then
-            month="10月"
-        elif echo "$uti" | grep -q '\-2\b'; then
-            month="11月"
-        elif echo "$uti" | grep -q 'space-black\|silver\b'; then
-            month="11月"
-        elif [ -n "$year" ]; then
-            # Default to Q4 if suffix not recognized
-            month="Q4"
-        fi
-
-        if [ -n "$year" ] && [ -n "$month" ]; then
-            manufacture_date="${year}年${month}"
-        fi
+if [ -n "$uti" ]; then
+    # 从 UTI 中提取年份（如 com.apple.macbookpro-14-2025 -> 2025）
+    year=$(echo "$uti" | grep -o '20[0-9][0-9]' | head -1)
+    if [ -n "$year" ]; then
+        manufacture_date="${year}年"
     fi
 fi
 
@@ -110,12 +85,18 @@ fi
 total_mem=$(sysctl -n hw.memsize)
 total_mem_gb=$(echo "scale=0; $total_mem / 1073741824" | bc)
 
-# GPU info
-gpu_name=$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Chipset Model" | head -1 | cut -d: -f2 | xargs)
+# GPU info（避免使用 system_profiler SPDisplaysDataType，该命令在 macOS Ventura+ 会触发 Apple Music 媒体库权限弹窗）
+gpu_name=$(ioreg -r -d 1 -c IOPCIDevice 2>/dev/null | awk -F'"' '/"model"/{print $4; exit}' | tr -d '\0')
 if [ -z "$gpu_name" ]; then
-    gpu_name="Integrated Graphics"
+    # Apple Silicon：从 sysctl 读取芯片型号作为 GPU 名
+    chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+    if echo "$chip" | grep -qi "apple"; then
+        gpu_name="$chip GPU"
+    else
+        gpu_name="Integrated Graphics"
+    fi
 fi
-resolution=$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Resolution" | head -1 | cut -d: -f2 | xargs)
+resolution=$(system_profiler SPDisplaysDataType --detailLevel mini 2>/dev/null | grep "Resolution" | head -1 | cut -d: -f2 | xargs)
 
 # Storage
 total_storage=0
