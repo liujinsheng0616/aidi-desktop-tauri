@@ -131,6 +131,11 @@ if (typeof window !== 'undefined') {
 }
 
 onMounted(async () => {
+  // 生产环境禁用右键菜单
+  if (import.meta.env.PROD) {
+    window.addEventListener('contextmenu', (e) => e.preventDefault())
+  }
+
   // 监听存储变化
   window.addEventListener('storage', handleStorageChange)
 
