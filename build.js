@@ -57,8 +57,10 @@ if (tauriConf.includes('{{APP_DOMAIN}}')) {
   console.log(`[build.js] tauri.conf.json 中未找到 APP_DOMAIN 占位符，跳过替换`);
 }
 
-// 执行构建命令
-const cmd = `npx vue-tsc --noEmit && npx vite build --mode ${mode}`;
+// 执行构建命令（Vite 的 --mode 决定加载哪个 .env 文件，prod 对应 .env.production）
+const viteModeMap = { 'prod': 'production', 'test': 'test', 'development': 'development' };
+const viteMode = viteModeMap[mode] || mode;
+const cmd = `npx vue-tsc --noEmit && npx vite build --mode ${viteMode}`;
 console.log(`[build.js] 执行命令: ${cmd}`);
 
 execSync(cmd, {

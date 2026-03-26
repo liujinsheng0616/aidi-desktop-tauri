@@ -17,8 +17,8 @@ case "$source" in
         if [ "$enabled" = "true" ]; then
             message="Cannot re-enable login items via script"
         else
-            # Remove login item
-            osascript -e "tell application \"System Events\" to delete login item \"$name\"" 2>/dev/null
+            # Remove login item using sfltool (no AppleScript / Apple Events needed)
+            sfltool remove com.apple.LSSharedFileList.SessionLoginItems "$name" 2>/dev/null
             if [ $? -eq 0 ]; then
                 success=true
                 message="Disabled login item: $name"

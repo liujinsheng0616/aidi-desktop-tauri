@@ -15,10 +15,10 @@
     "tauri:dev": "AIDI_ENV=${AIDI_ENV:-test} node pre-dev.js ${AIDI_ENV:-test} && AIDI_ENV=${AIDI_ENV:-test} tauri dev",
     "tauri:dev:local": "AIDI_ENV=development node pre-dev.js development && AIDI_ENV=development tauri dev",
     "tauri:test": "AIDI_ENV=test node pre-dev.js test && tauri dev",
-    "tauri:prod": "AIDI_ENV=production node pre-dev.js production && tauri dev",
+    "tauri:prod": "AIDI_ENV=prod node pre-dev.js prod && tauri dev",
     "tauri:build": "tauri build",
-    "tauri:build:test": "AIDI_ENV=test node build.js && tauri build",
-    "tauri:build:prod": "AIDI_ENV=production node build.js && tauri build"
+    "tauri:build:test": "AIDI_ENV=test node build.js && AIDI_ENV=test tauri build",
+    "tauri:build:prod": "AIDI_ENV=prod node build.js && AIDI_ENV=prod tauri build"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",

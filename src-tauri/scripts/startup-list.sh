@@ -5,8 +5,8 @@
 items=""
 count=0
 
-# Get Login Items using osascript
-login_items=$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null | tr ',' '\n')
+# Get Login Items using sfltool (no AppleScript / Apple Events needed)
+login_items=$(sfltool dumpgroup com.apple.LSSharedFileList.SessionLoginItems 2>/dev/null | grep "Name:" | sed 's/.*Name: //')
 
 while IFS= read -r item; do
     item=$(echo "$item" | xargs) # trim whitespace

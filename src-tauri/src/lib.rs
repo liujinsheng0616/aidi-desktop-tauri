@@ -90,7 +90,7 @@ fn get_external_url_base(_app: &AppHandle) -> String {
     }
 
     // 通过环境变量 AIDI_ENV 决定使用哪个环境
-    let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| "prod".to_string());
+    let env = std::env::var("AIDI_ENV").unwrap_or_else(|_| env!("AIDI_ENV_BAKED").to_string());
 
     match env.as_str() {
         "test" => "https://microsapptest.yadea.com.cn/aidi-desktop",
