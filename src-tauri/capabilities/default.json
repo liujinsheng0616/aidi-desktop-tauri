@@ -25,9 +25,6 @@
     "shell:allow-open",
     "core:webview:allow-create-webview-window",
     "core:window:allow-create",
-    "core:tray:default",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered"
+    "core:tray:default"
   ]
 }

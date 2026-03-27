@@ -6,6 +6,160 @@
 mod report_worker;
 mod feishu;
 
+// ── Carbon 全局快捷键（macOS）────────────────────────────────────────────────
+// 使用 RegisterEventHotKey 代替 tauri-plugin-global-shortcut（后者底层用
+// CGEventTap 监听所有键盘事件，会触发 Apple Music 媒体库权限弹窗）。
+// Carbon RegisterEventHotKey 只注册指定组合键，不访问媒体框架。
+#[cfg(target_os = "macos")]
+mod hotkey {
+    use super::*;
+    use std::ffi::c_void;
+
+    // kVK_ANSI_D = 0x02，cmdKey modifier = 0x0100
+    const KVK_ANSI_D: u32 = 0x02;
+    const CMD_KEY: u32 = 0x0100;
+    const HOTKEY_ID: u32 = 1;
+
+    #[repr(C)]
+    struct EventHotKeyID { signature: u32, id: u32 }
+
+    #[repr(C)]
+    struct EventHotKeyRef(*mut c_void);
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        fn RegisterEventHotKey(
+            inHotKeyCode: u32,
+            inHotKeyModifiers: u32,
+            inHotKeyID: EventHotKeyID,
+            inTarget: *mut c_void,
+            inOptions: u32,
+            outRef: *mut EventHotKeyRef,
+        ) -> i32;
+        fn GetApplicationEventTarget() -> *mut c_void;
+        fn InstallEventHandler(
+            inTarget: *mut c_void,
+            inHandler: *const c_void,
+            inNumTypes: usize,
+            inList: *const EventTypeSpec,
+            inUserData: *mut c_void,
+            outRef: *mut *mut c_void,
+        ) -> i32;
+    }
+
+    #[repr(C)]
+    struct EventTypeSpec { event_class: u32, event_kind: u32 }
+
+    // kEventClassKeyboard = 'keyb' = 0x6B657962，kEventHotKeyPressed = 5
+    const K_EVENT_CLASS_KEYBOARD: u32 = 0x6B657962;
+    const K_EVENT_HOT_KEY_PRESSED: u32 = 5;
+
+    // 全局存 AppHandle，供 C 回调使用
+    static APP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+    unsafe extern "C" fn hotkey_handler(
+        _call_ref: *mut c_void,
+        _event: *mut c_void,
+        _user_data: *mut c_void,
+    ) -> i32 {
+        if let Some(app) = APP_HANDLE.get() {
+            toggle_ball(app);
+        }
+        0 // noErr
+    }
+
+    fn toggle_ball(app: &AppHandle) {
+        if let Some(window) = app.webview_windows().get("main") {
+            let visible = BALL_VISIBLE.load(Ordering::SeqCst);
+            if visible {
+                let _ = window.hide();
+                BALL_VISIBLE.store(false, Ordering::SeqCst);
+                sync_toggle_menu_item(app, false);
+            } else {
+                let _ = window.show();
+                BALL_VISIBLE.store(true, Ordering::SeqCst);
+                sync_toggle_menu_item(app, true);
+                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                let full_size = ball_size_val + BALL_PADDING * 2;
+                apply_circular_window_mask(window, full_size, "shortcut_toggle");
+            }
+        }
+    }
+
+    pub fn register(app: AppHandle) {
+        let _ = APP_HANDLE.set(app);
+        unsafe {
+            let target = GetApplicationEventTarget();
+            let spec = EventTypeSpec {
+                event_class: K_EVENT_CLASS_KEYBOARD,
+                event_kind: K_EVENT_HOT_KEY_PRESSED,
+            };
+            let mut handler_ref: *mut c_void = std::ptr::null_mut();
+            InstallEventHandler(
+                target,
+                hotkey_handler as *const c_void,
+                1,
+                &spec,
+                std::ptr::null_mut(),
+                &mut handler_ref,
+            );
+            let mut hotkey_ref = EventHotKeyRef(std::ptr::null_mut());
+            RegisterEventHotKey(
+                KVK_ANSI_D,
+                CMD_KEY,
+                EventHotKeyID { signature: u32::from_be_bytes(*b"AIDI"), id: HOTKEY_ID },
+                target,
+                0,
+                &mut hotkey_ref,
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn register_hotkey_cmd_d(app: AppHandle) {
+    hotkey::register(app);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn register_hotkey_cmd_d(app: AppHandle) {
+    // Windows/Linux：用系统线程 + RegisterHotKey (Win32)
+    register_hotkey_windows(app);
+}
+
+#[cfg(target_os = "windows")]
+fn register_hotkey_windows(app: AppHandle) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_CONTROL, VK_D};
+    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+    std::thread::spawn(move || unsafe {
+        RegisterHotKey(None, 1, MOD_CONTROL, VK_D.0 as u32).ok();
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if msg.message == WM_HOTKEY {
+                let visible = BALL_VISIBLE.load(Ordering::SeqCst);
+                if let Some(window) = app.webview_windows().get("main") {
+                    if visible {
+                        let _ = window.hide();
+                        BALL_VISIBLE.store(false, Ordering::SeqCst);
+                        sync_toggle_menu_item(&app, false);
+                    } else {
+                        let _ = window.show();
+                        BALL_VISIBLE.store(true, Ordering::SeqCst);
+                        sync_toggle_menu_item(&app, true);
+                        let ball_size_val = *BALL_SIZE.lock().unwrap();
+                        let full_size = ball_size_val + BALL_PADDING * 2;
+                        apply_circular_window_mask(window, full_size, "shortcut_toggle");
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn register_hotkey_windows(_app: AppHandle) {}
+// ─────────────────────────────────────────────────────────────────────────────
+
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -2834,7 +2988,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             #[cfg(desktop)]
@@ -3068,40 +3221,10 @@ pub fn run() {
                 }
 
             }
-            // 注册全局快捷键：唤起聊天窗口
-            // 全局快捷键：Cmd+D (macOS) / Ctrl+D (Windows/Linux)
-            // 容错处理：快捷键注册失败不应影响应用启动
-            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-
-            // 全局快捷键：macOS 为 Cmd+D，Windows/Linux 为 Ctrl+D
-            let shortcut_str = "CommandOrControl+D";
-
-            let shortcut: Shortcut = shortcut_str.parse().expect("invalid shortcut");
-            if let Err(_) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    // 切换悬浮球显示/隐藏
-                    if let Some(window) = app.webview_windows().get("main") {
-                        let visible = BALL_VISIBLE.load(Ordering::SeqCst);
-                        if visible {
-                            // 当前可见 → 隐藏
-                            let _ = window.hide();
-                            BALL_VISIBLE.store(false, Ordering::SeqCst);
-                            sync_toggle_menu_item(app, false);
-                        } else {
-                            // 当前隐藏 → 显示
-                            let _ = window.show();
-                            BALL_VISIBLE.store(true, Ordering::SeqCst);
-                            sync_toggle_menu_item(app, true);
-                            // 应用窗口样式
-                            let ball_size_val = *BALL_SIZE.lock().unwrap();
-                            let full_size = ball_size_val + BALL_PADDING * 2;
-                            apply_circular_window_mask(window, full_size, "shortcut_toggle");
-                        }
-                    }
-                }
-            }) {
-            } else {
-            }
+            // 注册全局快捷键：Cmd+D (macOS) / Ctrl+D (Windows)
+            // 使用 Carbon RegisterEventHotKey，不触发 Apple Music 媒体库权限弹窗
+            let app_handle_hotkey = app.handle().clone();
+            register_hotkey_cmd_d(app_handle_hotkey);
 
             // 拦截 optimizer 窗口关闭事件：隐藏而不是销毁
             if let Some(optimizer_window) = app.get_webview_window("optimizer") {
