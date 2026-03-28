@@ -64,7 +64,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["scripts/*", "icons/tray-icon.png"]
+    "resources": ["scripts/*", "icons/tray-icon.png"],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   },
   "plugins": {
     "deep-link": {

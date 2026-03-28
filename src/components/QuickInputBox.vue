@@ -20,9 +20,12 @@ const inputText = ref('')
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const textareaHeight = ref(props.size || 60) // 动态高度，初始等于球高度
 const savedHeight = ref(0) // 保存收起前的高度
+const isSending = ref(false) // 发送中状态
 
 // 事件监听器清理函数
 let unlistenCollapse: UnlistenFn | null = null
+let unlistenStreamEnd: UnlistenFn | null = null
+let unlistenStreamStart: UnlistenFn | null = null
 
 const ballSize = computed(() => props.size || 60)
 
@@ -124,20 +127,33 @@ function autoResize() {
 // 发送消息
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text) return
+  if (!text || isSending.value) return
 
+  isSending.value = true
   try {
     // 调用 Rust 后端发送消息并显示聊天窗口
     await invoke('send_chat_message', { message: text })
     inputText.value = ''
-    // 发送后重置高度
+    // 发送后重置高度和 textarea DOM 样式，光标回到初始位置
     textareaHeight.value = ballSize.value
+    savedHeight.value = 0
+    if (inputRef.value) {
+      inputRef.value.style.height = 'auto'
+      inputRef.value.style.overflowY = 'hidden'
+      inputRef.value.setSelectionRange(0, 0)
+    }
     emit('heightChange', textareaHeight.value)
-    // 发送后保持输入框展开，等待用户继续输入
     inputRef.value?.focus()
   } catch (error) {
-    // 发送失败，忽略
+    isSending.value = false
   }
+}
+
+// 停止发送
+function stopMessage() {
+  isSending.value = false
+  // 向聊天窗口发送停止事件
+  emitTauriEvent('stop-chat-stream').catch(() => {})
 }
 
 // 按键处理
@@ -162,13 +178,21 @@ onMounted(async () => {
       collapseInput()
     }
   })
+  // 监听聊天流开始事件（重试时由 ChatView 触发）
+  unlistenStreamStart = await listen('chat-stream-start', () => {
+    isSending.value = true
+  })
+  // 监听聊天流结束事件，恢复发送按钮
+  unlistenStreamEnd = await listen('chat-stream-end', () => {
+    isSending.value = false
+  })
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  if (unlistenCollapse) {
-    unlistenCollapse()
-  }
+  if (unlistenCollapse) unlistenCollapse()
+  if (unlistenStreamStart) unlistenStreamStart()
+  if (unlistenStreamEnd) unlistenStreamEnd()
 })
 </script>
 
@@ -206,9 +230,20 @@ onUnmounted(() => {
             class="chat-input"
             placeholder="AIDI 一下，你就知道~"
             rows="1"
+            :disabled="isSending"
             @keydown="handleKeydown"
             @input="autoResize"
           />
+          <!-- 停止按钮（发送中） -->
+          <button v-if="isSending" class="action-btn stop-btn" @click.stop="stopMessage" title="停止">
+            <span class="stop-icon" />
+          </button>
+          <!-- 发送按钮（有内容时显示） -->
+          <button v-else-if="inputText.trim()" class="action-btn send-btn" @click.stop="sendMessage" title="发送">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M5 12h14M13 6l6 6-6 6"/>
+            </svg>
+          </button>
         </div>
       </div>
     </Transition>
@@ -294,6 +329,68 @@ onUnmounted(() => {
 
 .chat-input::placeholder {
   color: rgba(255, 255, 255, 0.38);
+}
+
+.chat-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 发送 / 停止按钮公共样式 */
+.action-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+
+.action-btn:active {
+  transform: scale(0.88);
+}
+
+/* 发送按钮 */
+.send-btn {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.send-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.send-btn svg {
+  width: 13px;
+  height: 13px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* 停止按钮 */
+.stop-btn {
+  background: rgba(255, 80, 80, 0.25);
+  animation: stop-pulse 1.2s ease-in-out infinite;
+}
+
+.stop-btn:hover {
+  background: rgba(255, 80, 80, 0.45);
+}
+
+.stop-icon {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 1.5px;
+  background: rgba(255, 120, 120, 0.95);
+}
+
+@keyframes stop-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 80, 80, 0.4); }
+  50%       { box-shadow: 0 0 0 4px rgba(255, 80, 80, 0); }
 }
 
 /* 展开动画 */
