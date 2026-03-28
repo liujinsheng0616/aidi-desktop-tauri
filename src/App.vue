@@ -147,6 +147,20 @@ onMounted(async () => {
     if (settings.opacity !== undefined) opacity.value = settings.opacity
     if (settings.color_theme) colorTheme.value = settings.color_theme
     if (settings.colorTheme) colorTheme.value = settings.colorTheme
+
+    // 持久化到 tauri://localhost 自己的 localStorage
+    // App.vue 与 MenuView（web origin）各自独立，重启后能读到正确设置
+    try {
+      const saved = localStorage.getItem('aidi-settings')
+      const prev = saved ? JSON.parse(saved) : {}
+      const merged = {
+        ...prev,
+        ballSize: ballSize.value,
+        opacity: opacity.value,
+        colorTheme: colorTheme.value,
+      }
+      localStorage.setItem('aidi-settings', JSON.stringify(merged))
+    } catch { /* ignore */ }
   })
 
   // 监听登录完成事件
