@@ -2174,7 +2174,7 @@ fn show_menu(app: tauri::AppHandle) {
         return;
     };
     let ball_size = *BALL_SIZE.lock().unwrap();
-    let visual_ball_size = (ball_size + BALL_PADDING * 2) as i32;
+    let _visual_ball_size = (ball_size + BALL_PADDING * 2) as i32;
     let ball_x = (ball_pos.x as f64 / scale_factor) as i32;
     let ball_y = (ball_pos.y as f64 / scale_factor) as i32;
     // 胶囊收起态固定宽度：ball(60) + divider(1) + search(36) + border(2) = 99
