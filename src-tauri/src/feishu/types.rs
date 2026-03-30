@@ -4,21 +4,17 @@ use serde::{Deserialize, Serialize};
 
 // ==================== 登录相关 ====================
 
-/// OAuth token 请求响应
+/// OAuth token 请求响应（/authen/v2/oauth/token 返回扁平结构，access_token 在顶层）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthTokenResponse {
     pub code: i32,
     pub msg: Option<String>,
-    pub data: Option<OAuthTokenData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthTokenData {
-    pub access_token: String,
-    pub token_type: String,
-    pub expires_in: i64,
-    pub refresh_token: String,
-    pub open_id: String,
+    // v2 接口直接把字段放顶层，无 data 包装
+    pub access_token: Option<String>,
+    pub token_type: Option<String>,
+    pub expires_in: Option<i64>,
+    pub refresh_token: Option<String>,
+    pub open_id: Option<String>,
 }
 
 /// 用户信息响应

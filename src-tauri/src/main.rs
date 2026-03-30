@@ -24,9 +24,8 @@ fn main() {
         );
         eprintln!("{}", full_msg);
 
-        // 尝试写入崩溃日志到多个位置
+        // 尝试写入崩溃日志到多个位置（不写桌面，避免触发 macOS TCC 权限弹框）
         let crash_locations: Vec<Option<std::path::PathBuf>> = vec![
-            dirs::desktop_dir().map(|p| p.join("aidi-crash.log")),
             dirs::data_local_dir().map(|p| {
                 let dir = p.join("aidi-desktop");
                 let _ = std::fs::create_dir_all(&dir);

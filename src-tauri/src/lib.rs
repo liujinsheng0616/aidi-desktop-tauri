@@ -2057,17 +2057,25 @@ fn handle_login_success(app: &tauri::AppHandle) {
             if let Ok(content) = std::fs::read_to_string(&auth_file) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                     let token = json["token"].as_str().unwrap_or("");
-                    let user_json = json["user"].as_str().unwrap_or("{}");
+                    // user 字段可能是字符串或对象，统一序列化为 JSON 字符串再嵌入 JS
+                    let user_json_str = if let Some(s) = json["user"].as_str() {
+                        s.to_string()
+                    } else {
+                        json["user"].to_string()
+                    };
+                    // 将 JSON 字符串作为 JS 字符串字面量嵌入（带引号、转义）
+                    let user_js_literal = serde_json::to_string(&user_json_str)
+                        .unwrap_or_else(|_| "\"{}\"".to_string());
                     format!(
                         r#"(function() {{
                             try {{
-                                localStorage.setItem('aidi-token', {});
-                                localStorage.setItem('aidi-user', {});
-                            }} catch(e) {{}}
+                                localStorage.setItem('aidi-token', {token_lit});
+                                localStorage.setItem('aidi-user', {user_lit});
+                            }} catch(e) {{ console.error('[inject] localStorage error', e); }}
                             window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete();
                         }})();"#,
-                        serde_json::to_string(&serde_json::json!(token)).unwrap_or_else(|_| "\"\"".to_string()),
-                        user_json
+                        token_lit = serde_json::to_string(&serde_json::json!(token)).unwrap_or_else(|_| "\"\"".to_string()),
+                        user_lit = user_js_literal,
                     )
                 } else {
                     String::new()
@@ -2083,22 +2091,33 @@ fn handle_login_success(app: &tauri::AppHandle) {
         let app_clone = app.clone();
         let main_window_clone = main_window.clone();
         tauri::async_runtime::spawn(async move {
-            let _ = main_window_clone.show();
+            let show_result = main_window_clone.show();
+            eprintln!("[login_success] show() result: {:?}", show_result);
+            // 登录成功后强制移回主屏幕中央，避免残留副屏坐标导致不可见
+            eprintln!("[login_success] centering...");
+            let _ = main_window_clone.center();
             BALL_VISIBLE.store(true, Ordering::SeqCst);
             // Windows 上 SetWindowRgn 在窗口隐藏后重新显示时可能失效，重新应用圆形遮罩
             let ball_size_val = *BALL_SIZE.lock().unwrap();
             let full_size = ball_size_val + BALL_PADDING * 2;
+            eprintln!("[login_success] ball_size={}, full_size={}", ball_size_val, full_size);
             apply_circular_window_mask(&main_window_clone, full_size, "login_success");
+            eprintln!("[login_success] is_visible={:?}", main_window_clone.is_visible());
+            eprintln!("[login_success] outer_position={:?}", main_window_clone.outer_position());
+            let _ = main_window_clone.set_always_on_top(true);
+            let _ = main_window_clone.set_focus();
             if !js_inject.is_empty() {
                 let _ = main_window_clone.eval(&js_inject);
             } else {
-                // auth.json 读取失败时直接调用前端初始化函数
                 let _ = main_window_clone.eval("window.__aidiHandleLoginComplete && window.__aidiHandleLoginComplete()");
             }
+            // 额外通过事件通知 main 窗口登录完成（兜底，避免 eval 时机问题）
+            let _ = main_window_clone.emit("login-complete", ());
 
             rebuild_tray_menu(&app_clone, true, true);
         });
     } else {
+        eprintln!("[login_success] ERROR: main window not found!");
     }
 }
 
@@ -2152,16 +2171,20 @@ fn show_menu(app: tauri::AppHandle) {
     let visual_ball_size = (ball_size + BALL_PADDING * 2) as i32;
     let ball_x = (ball_pos.x as f64 / scale_factor) as i32;
     let ball_y = (ball_pos.y as f64 / scale_factor) as i32;
+    // 胶囊收起态固定宽度：ball(60) + divider(1) + search(36) + border(2) = 99
+    // 用常量避免 outer_size() 在展开/收起动画中返回错误值
+    let pill_width: i32 = ball_size as i32 + 1 + 36 + 2;
+    let main_window_right = ball_x + pill_width;
 
-    // 计算水平方向：根据球中心是否过屏幕中线决定菜单对齐方式和子菜单展开方向
-    let ball_center_x = ball_x + visual_ball_size / 2;
-    let opens_left = ball_center_x > screen_width / 2;
+    // 计算水平方向：胶囊窗口（含搜索框）中心在屏幕右半则向左展开，否则向右展开
+    let pill_center_x = ball_x + pill_width / 2;
+    let opens_left = pill_center_x > screen_width / 2;
 
     let (menu_x, submenu_direction) = if opens_left {
-        // 右侧空间不足（球在右侧），子菜单向左展开，主菜单右对齐球体
-        (ball_x + visual_ball_size - menu_width, "left")
+        // 向左展开：菜单右边缘对齐主窗口（悬浮球+搜索框）右边缘
+        (main_window_right - menu_width, "left")
     } else {
-        // 右侧空间充足（球在左侧），子菜单向右展开，主菜单左对齐球体
+        // 向右展开：菜单左边缘对齐主窗口左边缘
         (ball_x, "right")
     };
 
@@ -2204,22 +2227,21 @@ fn show_menu(app: tauri::AppHandle) {
                     y: menu_y as f64,
                 }));
                 let _ = existing.navigate(new_url);
-                let app2 = app_for_main.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                    if let Some(w) = app2.webview_windows().get("menu") {
-                        // Windows 上复用窗口 navigate 也可能触发系统恢复 WS_CAPTION，修复 main 窗口遮罩
+                // Windows 上复用窗口 navigate 也可能触发系统恢复 WS_CAPTION，延迟修复 main 窗口遮罩
+                // 菜单显示由前端 menu_ready 命令触发，不在此处 show()
+                #[cfg(target_os = "windows")]
+                {
+                    let app2 = app_for_main.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                         if let Some(main_w) = app2.webview_windows().get("main") {
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                             let full_size = ball_size_val + BALL_PADDING * 2;
                             apply_circular_window_mask(&main_w, full_size, "menu_reuse");
                         }
-                        let _ = w.show();
-                        // 菜单显示后延迟刷新悬浮球遮罩，解决 Z-order 变化导致的灰色背景
-                        #[cfg(target_os = "windows")]
                         schedule_refresh_ball_mask(&app2);
-                    }
-                });
+                    });
+                }
             }
         });
     } else {
@@ -2247,18 +2269,18 @@ fn show_menu(app: tauri::AppHandle) {
                         x: mx as f64,
                         y: my as f64,
                     }));
-                    // 延迟 600ms 后显示，等待远程页面加载
-                    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                    // Windows 上新建 WebView2 窗口会导致系统恢复 WS_CAPTION，菜单 show() 前重新修复 main 窗口遮罩
-                    if let Some(main_w) = app_clone.webview_windows().get("main") {
-                        let ball_size_val = *BALL_SIZE.lock().unwrap();
-                        let full_size = ball_size_val + BALL_PADDING * 2;
-                        apply_circular_window_mask(&main_w, full_size, "after_menu_create");
-                    }
-                    let _ = w.show();
-                    // 菜单显示后延迟刷新悬浮球遮罩，解决 Z-order 变化导致的灰色背景
+                    // 菜单显示由前端 menu_ready 命令触发，不在此处 show()
+                    // Windows 上新建 WebView2 窗口会导致系统恢复 WS_CAPTION，延迟修复 main 窗口遮罩
                     #[cfg(target_os = "windows")]
-                    schedule_refresh_ball_mask(&app_clone);
+                    {
+                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                        if let Some(main_w) = app_clone.webview_windows().get("main") {
+                            let ball_size_val = *BALL_SIZE.lock().unwrap();
+                            let full_size = ball_size_val + BALL_PADDING * 2;
+                            apply_circular_window_mask(&main_w, full_size, "after_menu_create");
+                        }
+                        schedule_refresh_ball_mask(&app_clone);
+                    }
                 }
                 Ok(Err(_)) => {}
                 Err(_) => {}
@@ -2799,19 +2821,12 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 
 #[tauri::command]
 async fn show_login_window(app: tauri::AppHandle) {
-    // 先隐藏其他所有窗口
+    // 先隐藏所有非 login 窗口
     let windows = app.webview_windows();
-    if let Some(w) = windows.get("main") {
-        let _ = w.hide();
-    }
-    if let Some(w) = windows.get("menu") {
-        let _ = w.hide();
-    }
-    if let Some(w) = windows.get("optimizer") {
-        let _ = w.hide();
-    }
-    if let Some(w) = windows.get("panel") {
-        let _ = w.hide();
+    for (label, w) in &windows {
+        if label != "login" {
+            let _ = w.hide();
+        }
     }
 
     // 检查登录窗口是否已存在

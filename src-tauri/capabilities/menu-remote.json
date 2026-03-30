@@ -10,7 +10,7 @@
       "http://localhost:5173/*"
     ]
   },
-  "windows": ["menu", "chat"],
+  "windows": ["menu", "chat", "login"],
   "permissions": [
     "core:default",
     "core:event:allow-emit",

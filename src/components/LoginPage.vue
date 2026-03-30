@@ -16,6 +16,7 @@ const redirectUri = encodeURIComponent(redirectUriRaw)
 const gotoUrl = `https://passport.feishu.cn/suite/passport/oauth/authorize?client_id=${appId}&redirect_uri=${redirectUri}&response_type=code&state=FS`
 const qrIframeSrc = `https://passport.feishu.cn/suite/passport/sso/qr?goto=${encodeURIComponent(gotoUrl)}`
 
+
 let deepLinkUnsubscribe: (() => void) | null = null
 
 function retryLogin() {

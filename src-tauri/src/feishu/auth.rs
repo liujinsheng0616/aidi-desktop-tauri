@@ -1,6 +1,6 @@
 //! 飞书 OAuth 登录 API
 
-use crate::feishu::config::{APP_ID, APP_SECRET, REDIRECT_URI, FEISHU_API_BASE};
+use crate::feishu::config::{APP_ID, APP_SECRET, redirect_uri, FEISHU_API_BASE};
 use crate::feishu::types::{OAuthTokenResponse, UserInfoData, UserInfoResponse};
 
 /// 通过授权码获取用户访问令牌
@@ -14,7 +14,7 @@ async fn get_user_access_token(code: &str) -> Result<String, String> {
         "client_id": APP_ID,
         "client_secret": APP_SECRET,
         "code": code,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri(),
     });
 
     let response = client
@@ -37,8 +37,7 @@ async fn get_user_access_token(code: &str) -> Result<String, String> {
     }
 
     token_resp
-        .data
-        .map(|d| d.access_token)
+        .access_token
         .ok_or_else(|| "响应中缺少 access_token".to_string())
 }
 
