@@ -1875,6 +1875,12 @@ fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>) -> 
                         }
                     }
                 }
+                // Windows DWM 在用户拖拽调整大小时会恢复系统阴影，需重新禁用
+                #[cfg(target_os = "windows")]
+                {
+                    apply_borderless_window_style(&chat_window_clone, "chat_resize");
+                    let _ = chat_window_clone.set_shadow(false);
+                }
             }
             _ => {}
         }
@@ -2211,13 +2217,13 @@ fn show_menu(app: tauri::AppHandle) {
     let menu_exists = app.webview_windows().contains_key("menu");
 
     if menu_exists {
-        // 复用路径：仍用 run_on_main_thread（只做 navigate/set_size，不涉及 WebView2 初始化，无死锁风险）
+        // 复用路径：不再 navigate()，避免 Windows WebView2 对隐藏窗口暂停 JS 执行
+        // 导致 onMounted 不触发、menu_ready 永远不调、菜单永远显示不出来的 bug
+        // 改为 emit("menu-reuse", direction) 让前端自行重置状态，然后直接 show()
         let app_for_main = app.clone();
         let direction_owned = submenu_direction.to_string();
         let _ = app.run_on_main_thread(move || {
-            let new_url = tauri::Url::parse(&build_menu_url(&app_for_main, &direction_owned)).unwrap();
             if let Some(existing) = app_for_main.webview_windows().get("menu") {
-                let _ = existing.hide();
                 let _ = existing.set_size(Size::Logical(tauri::LogicalSize {
                     width: menu_width as f64,
                     height: menu_height as f64,
@@ -2226,14 +2232,15 @@ fn show_menu(app: tauri::AppHandle) {
                     x: menu_x as f64,
                     y: menu_y as f64,
                 }));
-                let _ = existing.navigate(new_url);
-                // Windows 上复用窗口 navigate 也可能触发系统恢复 WS_CAPTION，延迟修复 main 窗口遮罩
-                // 菜单显示由前端 menu_ready 命令触发，不在此处 show()
+                // 通知前端更新方向状态并重置子菜单（JS 在 show() 后恢复执行时处理）
+                let _ = existing.emit("menu-reuse", &direction_owned);
+                // 直接显示，不依赖 menu_ready（Windows 隐藏窗口 JS 暂停，menu_ready 永远不会触发）
+                let _ = existing.show();
                 #[cfg(target_os = "windows")]
                 {
                     let app2 = app_for_main.clone();
                     tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         if let Some(main_w) = app2.webview_windows().get("main") {
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
                             let full_size = ball_size_val + BALL_PADDING * 2;

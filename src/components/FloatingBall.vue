@@ -13,8 +13,8 @@ const props = defineProps<{
   isInputExpanded?: boolean
 }>()
 
-// 判断是否为开发模式（临时注释，调试完成后恢复）
-// const isDev = import.meta.env.DEV
+// 开发模式：保留 devtools 右键菜单；生产模式：右键唤起 AIDI 菜单
+const isDev = import.meta.env.DEV
 
 // 使用设计规范中的 120px 作为基准尺寸
 const ballSize = computed(() => props.size || 60)
@@ -43,25 +43,21 @@ let hoverTimeout: number | null = null
 let hideDockTimeout: number | null = null
 let hoverVersion = 0
 
-// 右键菜单处理 - 临时禁用自定义菜单，保留 devtools 右键菜单用于调试
-function handleContextMenu(_e: MouseEvent) {
-  // 临时注释掉，允许 devtools 右键菜单
-  // if (!isDev) {
-  //   _e.preventDefault()
-  //   // 自定义菜单在 handleMouseDown 中已处理
-  // }
-  // 保留 devtools 菜单用于调试
+// 右键菜单处理：生产模式阻止原生菜单（自定义菜单由 handleMouseDown 触发）
+function handleContextMenu(e: MouseEvent) {
+  if (!isDev) {
+    e.preventDefault()
+  }
 }
 
 // 鼠标按下 - 开始拖拽
 async function handleMouseDown(e: MouseEvent) {
-  // 右键 - 临时禁用自定义菜单，保留 devtools 右键菜单用于调试
+  // 右键：生产模式唤起 AIDI 菜单，开发模式保留 devtools 右键菜单
   if (e.button === 2) {
-    // 临时注释，保留 devtools 右键菜单
-    // if (!isDev) {
-    //   e.preventDefault()
-    //   invoke('show_menu')
-    // }
+    if (!isDev && !props.isInputExpanded) {
+      e.preventDefault()
+      invoke('show_menu')
+    }
     return
   }
 
