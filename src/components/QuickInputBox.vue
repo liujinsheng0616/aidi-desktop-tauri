@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit as emitTauriEvent, UnlistenFn } from '@tauri-apps/api/event'
 
@@ -182,9 +182,10 @@ onMounted(async () => {
   unlistenStreamStart = await listen('chat-stream-start', () => {
     isSending.value = true
   })
-  // 监听聊天流结束事件，恢复发送按钮
+  // 监听聊天流结束事件，恢复发送按钮并重新聚焦输入框
   unlistenStreamEnd = await listen('chat-stream-end', () => {
     isSending.value = false
+    nextTick(() => inputRef.value?.focus())
   })
 })
 

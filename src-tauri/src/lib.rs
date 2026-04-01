@@ -2018,6 +2018,11 @@ async fn send_chat_message(app: tauri::AppHandle, message: String) {
 /// 更新聊天窗口位置（当悬浮球移动时调用）
 #[tauri::command]
 fn update_chat_window_position(app: tauri::AppHandle) {
+    update_chat_window_position_with_height(&app, None);
+}
+
+/// 更新聊天窗口位置，支持传入已知的悬浮球窗口高度（物理像素）以避免 set_size 的异步延迟
+fn update_chat_window_position_with_height(app: &tauri::AppHandle, override_ball_height_logical: Option<u32>) {
     if let (Some(chat_window), Some(main_window)) =
         (app.webview_windows().get("chat"), app.webview_windows().get("main")) {
         // 只有聊天窗口可见时才更新位置
@@ -2029,7 +2034,14 @@ fn update_chat_window_position(app: tauri::AppHandle) {
                         // chat_x = ball_pos.x + ball_width/2 - chat_width/2
                         let ball_center = ball_pos.x + ball_size.width as i32 / 2;
                         let chat_x = ball_center - chat_size.width as i32 / 2;
-                        let chat_y = ball_pos.y + ball_size.height as i32;
+                        // 若调用方已知新高度（逻辑像素），转为物理像素后使用，避免 OS 异步延迟
+                        let ball_height = if let Some(logical_h) = override_ball_height_logical {
+                            let scale = main_window.scale_factor().unwrap_or(1.0);
+                            (logical_h as f64 * scale) as i32
+                        } else {
+                            ball_size.height as i32
+                        };
+                        let chat_y = ball_pos.y + ball_height;
                         let _ = chat_window.set_position(Position::Physical(PhysicalPosition {
                             x: chat_x,
                             y: chat_y,
@@ -2560,8 +2572,8 @@ fn resize_input_window_height(app: tauri::AppHandle, height: u32) {
             height: window_height as f64,
         }));
 
-        // 窗口大小改变后，更新聊天窗口位置
-        update_chat_window_position(app.clone());
+        // 直接传入已知的新高度，避免 set_size 异步延迟导致读取旧尺寸
+        update_chat_window_position_with_height(&app, Some(window_height));
     }
 }
 
