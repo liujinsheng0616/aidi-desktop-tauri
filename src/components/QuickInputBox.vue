@@ -21,13 +21,47 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const textareaHeight = ref(props.size || 60) // 动态高度，初始等于球高度
 const savedHeight = ref(0) // 保存收起前的高度
 const isSending = ref(false) // 发送中状态
+const pendingScreenshot = ref<string | null>(null) // 截图 base64 data URL（预览用）
+// 截图权限缺失提示：借 placeholder 显示，避免在小窗口里做浮层被窗口边界裁掉
+const permissionNotice = ref<string | null>(null)
+let noticeTimer: ReturnType<typeof setTimeout> | null = null
 
 // 事件监听器清理函数
 let unlistenCollapse: UnlistenFn | null = null
 let unlistenStreamEnd: UnlistenFn | null = null
 let unlistenStreamStart: UnlistenFn | null = null
+let unlistenQuickScreenshot: UnlistenFn | null = null
+let unlistenScreenshotPermission: UnlistenFn | null = null
 
 const ballSize = computed(() => props.size || 60)
+
+/**
+ * 显示截图权限提示。
+ * 用独立提示行替换输入框（而非 placeholder）：长按空格会把空格打进输入框，
+ * inputText 非空时 placeholder 不显示，正好是最需要提示的场景。
+ * inputText 是 ref，textarea 短暂卸载不会丢已输入内容。
+ */
+function showPermissionNotice(message: string) {
+  permissionNotice.value = message
+  if (noticeTimer) clearTimeout(noticeTimer)
+  // 8s 而非 5s：提示行是可点击的授权入口，得留出看见 + 点击的时间；
+  // 但它占着输入框位置，不能常驻，所以仍然自动恢复。
+  noticeTimer = setTimeout(() => {
+    permissionNotice.value = null
+    noticeTimer = null
+    nextTick(() => inputRef.value?.focus())
+  }, 8000)
+}
+
+/** 点击提示行 → 打开系统「屏幕录制」设置面板 */
+function openPermissionSettings() {
+  invoke('open_screen_recording_settings').catch(() => {})
+  // 立刻收起提示，把输入框还给用户（授权在系统设置里进行，与此处无关）
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = null
+  permissionNotice.value = null
+  nextTick(() => inputRef.value?.focus())
+}
 
 // 点击搜索按钮 - 展开/收起输入框
 function toggleInput() {
@@ -78,6 +112,11 @@ function handleClickOutside(e: MouseEvent) {
 
 // 收起输入框
 function collapseInput() {
+  // 收起时清除待发截图（避免后端 static 残留，被下次纯文本消息误带）
+  if (pendingScreenshot.value) {
+    pendingScreenshot.value = null
+    invoke('clear_pending_screenshot').catch(() => {})
+  }
   // 保存当前高度（非初始高度时才保存）
   if (textareaHeight.value > ballSize.value) {
     savedHeight.value = textareaHeight.value
@@ -124,14 +163,34 @@ function autoResize() {
   emit('heightChange', textareaHeight.value)
 }
 
+// 移除截图预览
+function removeScreenshot() {
+  pendingScreenshot.value = null
+  invoke('clear_pending_screenshot').catch(() => {})
+}
+
+// 点击缩略图查看大图（交系统看图工具打开，可缩放）
+function openPreview() {
+  if (!pendingScreenshot.value) return
+  invoke('open_screenshot_preview', { dataUrl: pendingScreenshot.value }).catch(() => {})
+}
+
 // 发送消息
 async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text || isSending.value) return
+  const hasImg = !!pendingScreenshot.value
+  if ((!text && !hasImg) || isSending.value) return
 
   isSending.value = true
+  // 先清本地预览、再 await：collapseInput() 在 pendingScreenshot 非空时会调用
+  // clear_pending_screenshot 清空后端缓存。send_chat_message 期间可能要新建聊天窗口
+  // 并加载远程页面，耗时较长，此间若用户点击别处触发收起，
+  // 就会把 ChatView 尚未取走的截图清掉，导致只发出文字、图丢失。
+  const imgSnapshot = pendingScreenshot.value
+  pendingScreenshot.value = null
   try {
     // 调用 Rust 后端发送消息并显示聊天窗口
+    // 注：截图走后端 static 缓存，ChatView 发送时主动拉取（多模态）
     await invoke('send_chat_message', { message: text })
     inputText.value = ''
     // 发送后重置高度和 textarea DOM 样式，光标回到初始位置
@@ -145,6 +204,8 @@ async function sendMessage() {
     emit('heightChange', textareaHeight.value)
     inputRef.value?.focus()
   } catch (error) {
+    // 发送失败：恢复截图预览，让用户能直接重试（后端缓存仍在，未被取走）
+    if (imgSnapshot) pendingScreenshot.value = imgSnapshot
     isSending.value = false
   }
 }
@@ -187,6 +248,29 @@ onMounted(async () => {
     isSending.value = false
     nextTick(() => inputRef.value?.focus())
   })
+  // 监听截图预览（长按空格 / Cmd+E，自动展开输入框并挂上缩略图）
+  unlistenQuickScreenshot = await listen<{ imageBase64: string }>('quick-screenshot-preview', (event) => {
+    if (event.payload?.imageBase64) {
+      // 截图成功，清掉可能还在显示的权限提示
+      if (noticeTimer) clearTimeout(noticeTimer)
+      noticeTimer = null
+      permissionNotice.value = null
+      pendingScreenshot.value = event.payload.imageBase64
+      if (!isExpanded.value) {
+        toggleInput()
+      } else {
+        nextTick(() => inputRef.value?.focus())
+      }
+    }
+  })
+  // 监听截图权限缺失（此前后端已发此事件但前端无人接收，表现为按了没反应）
+  unlistenScreenshotPermission = await listen<{ message: string }>('screenshot-permission-needed', (event) => {
+    const message = event.payload?.message || '需要「屏幕录制」权限才能截图'
+    if (!isExpanded.value) {
+      toggleInput()
+    }
+    showPermissionNotice(message)
+  })
 })
 
 onUnmounted(() => {
@@ -194,6 +278,9 @@ onUnmounted(() => {
   if (unlistenCollapse) unlistenCollapse()
   if (unlistenStreamStart) unlistenStreamStart()
   if (unlistenStreamEnd) unlistenStreamEnd()
+  if (unlistenQuickScreenshot) unlistenQuickScreenshot()
+  if (unlistenScreenshotPermission) unlistenScreenshotPermission()
+  if (noticeTimer) clearTimeout(noticeTimer)
 })
 </script>
 
@@ -221,11 +308,32 @@ onUnmounted(() => {
         }"
       >
         <div class="input-wrapper">
+          <!-- 截图缩略图预览（Cmd+E） -->
+          <div v-if="pendingScreenshot" class="screenshot-thumb">
+            <img :src="pendingScreenshot" alt="截图预览" title="点击查看大图" @click.stop="openPreview" />
+            <button class="thumb-remove" @click.stop="removeScreenshot" title="移除截图">×</button>
+          </div>
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/>
             <path d="M21 21l-4.35-4.35"/>
           </svg>
+          <!-- 截图权限缺失提示（替换输入框，5s 后自动恢复） -->
+          <!-- 点击打开系统设置面板；title 承载完整说明（提示行宽度有限，只放短文案） -->
+          <div
+            v-if="permissionNotice"
+            class="permission-notice"
+            title="需要「屏幕录制」权限才能截图。点击打开「系统设置 → 隐私与安全性 → 屏幕录制」，勾选 AIDI 后重启应用。"
+            @click.stop="openPermissionSettings"
+          >
+            <svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 8v4M12 16h.01"/>
+            </svg>
+            <span class="notice-text">{{ permissionNotice }}</span>
+            <span class="notice-action">点击授权</span>
+          </div>
           <textarea
+            v-else
             ref="inputRef"
             v-model="inputText"
             class="chat-input"
@@ -240,7 +348,7 @@ onUnmounted(() => {
             <span class="stop-icon" />
           </button>
           <!-- 发送按钮（有内容时显示） -->
-          <button v-else-if="inputText.trim()" class="action-btn send-btn" @click.stop="sendMessage" title="发送">
+          <button v-else-if="inputText.trim() || pendingScreenshot" class="action-btn send-btn" @click.stop="sendMessage" title="发送">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M5 12h14M13 6l6 6-6 6"/>
             </svg>
@@ -312,6 +420,94 @@ onUnmounted(() => {
   height: 16px;
   color: rgba(255, 255, 255, 0.5);
   flex-shrink: 0;
+}
+
+/* 截图缩略图（Cmd+E 预览） */
+.screenshot-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.screenshot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+  cursor: zoom-in;
+  transition: transform 120ms ease;
+}
+.screenshot-thumb img:hover {
+  transform: scale(1.08);
+}
+.thumb-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.thumb-remove:hover {
+  background: rgba(220, 38, 38, 0.9);
+}
+
+/* 截图权限缺失提示：占据输入框位置，5s 后自动恢复成输入框 */
+.permission-notice {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #FCA5A5;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.permission-notice:hover .notice-action {
+  background: rgba(252, 165, 165, 0.28);
+}
+
+/* 「点击授权」标签：不参与压缩，保证在窄窗口里始终可见可点 */
+.notice-action {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(252, 165, 165, 0.16);
+  border: 1px solid rgba(252, 165, 165, 0.35);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.notice-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 窗口宽度固定（展开态 303px），文案超长时省略而不是撑破布局 */
+.notice-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-input {

@@ -26,3 +26,4 @@ dist-ssr
 # 含密码的环境变量文件，本地手动创建，不提交
 .env.development
 .env.production
+.cargo/

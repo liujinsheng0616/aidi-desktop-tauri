@@ -15,10 +15,14 @@ mod hotkey {
     use super::*;
     use std::ffi::c_void;
 
-    // kVK_ANSI_D = 0x02，cmdKey modifier = 0x0100
+    // 按键码与修饰键：kVK_ANSI_D=0x02，kVK_ANSI_E=0x0E，cmdKey=0x0100
     const KVK_ANSI_D: u32 = 0x02;
+    const KVK_ANSI_E: u32 = 0x0E;
     const CMD_KEY: u32 = 0x0100;
-    const HOTKEY_ID: u32 = 1;
+
+    // 热键 ID（handler 据此分流）
+    const HOTKEY_ID_BALL: u32 = 1;        // Cmd+D → 切换浮动球
+    const HOTKEY_ID_SCREENSHOT: u32 = 2;  // Cmd+E → 截图提问
 
     #[repr(C)]
     struct EventHotKeyID { signature: u32, id: u32 }
@@ -45,25 +49,56 @@ mod hotkey {
             inUserData: *mut c_void,
             outRef: *mut *mut c_void,
         ) -> i32;
+        // 读取本次触发的热键 ID，用于区分多个热键
+        fn GetEventParameter(
+            inEvent: *mut c_void,
+            inName: u32,
+            inDesiredType: u32,
+            outActualType: *mut u32,
+            inBufferSize: usize,
+            ioActualSize: *mut usize,
+            outData: *mut c_void,
+        ) -> i32;
     }
 
     #[repr(C)]
     struct EventTypeSpec { event_class: u32, event_kind: u32 }
 
-    // kEventClassKeyboard = 'keyb' = 0x6B657962，kEventHotKeyPressed = 5
+    // kEventClassKeyboard = 'keyb'，kEventHotKeyPressed = 5
     const K_EVENT_CLASS_KEYBOARD: u32 = 0x6B657962;
     const K_EVENT_HOT_KEY_PRESSED: u32 = 5;
+    // kEventParamDirectObject = '----'，typeEventHotKeyID = 'hkid'
+    const K_EVENT_PARAM_DIRECT_OBJECT: u32 = 0x2D2D2D2D;
+    const TYPE_EVENT_HOT_KEY_ID: u32 = 0x686B6964;
 
     // 全局存 AppHandle，供 C 回调使用
     static APP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
     unsafe extern "C" fn hotkey_handler(
         _call_ref: *mut c_void,
-        _event: *mut c_void,
+        event: *mut c_void,
         _user_data: *mut c_void,
     ) -> i32 {
+        // 读取触发的热键 ID
+        let mut hotkey_id = EventHotKeyID { signature: 0, id: 0 };
+        let mut actual_size: usize = 0;
+        GetEventParameter(
+            event,
+            K_EVENT_PARAM_DIRECT_OBJECT,
+            TYPE_EVENT_HOT_KEY_ID,
+            std::ptr::null_mut(),
+            std::mem::size_of::<EventHotKeyID>(),
+            &mut actual_size,
+            &mut hotkey_id as *mut _ as *mut c_void,
+        );
         if let Some(app) = APP_HANDLE.get() {
-            toggle_ball(app);
+            match hotkey_id.id {
+                HOTKEY_ID_BALL => toggle_ball(app),
+                HOTKEY_ID_SCREENSHOT => space_screenshot::do_screenshot_and_emit(app, "Cmd+E"),
+                _ => {}
+            }
+        } else {
+            eprintln!("[hotkey] APP_HANDLE 未设置，无法分发");
         }
         0 // noErr
     }
@@ -95,7 +130,7 @@ mod hotkey {
                 event_kind: K_EVENT_HOT_KEY_PRESSED,
             };
             let mut handler_ref: *mut c_void = std::ptr::null_mut();
-            InstallEventHandler(
+            let install_ret = InstallEventHandler(
                 target,
                 hotkey_handler as *const c_void,
                 1,
@@ -103,15 +138,33 @@ mod hotkey {
                 std::ptr::null_mut(),
                 &mut handler_ref,
             );
-            let mut hotkey_ref = EventHotKeyRef(std::ptr::null_mut());
-            RegisterEventHotKey(
+            let signature = u32::from_be_bytes(*b"AIDI");
+            // Cmd+D → 切换浮动球
+            let mut ref_ball = EventHotKeyRef(std::ptr::null_mut());
+            let ret_ball = RegisterEventHotKey(
                 KVK_ANSI_D,
                 CMD_KEY,
-                EventHotKeyID { signature: u32::from_be_bytes(*b"AIDI"), id: HOTKEY_ID },
+                EventHotKeyID { signature, id: HOTKEY_ID_BALL },
                 target,
                 0,
-                &mut hotkey_ref,
+                &mut ref_ball,
             );
+            // Cmd+E → 截图提问
+            let mut ref_shot = EventHotKeyRef(std::ptr::null_mut());
+            let ret_shot = RegisterEventHotKey(
+                KVK_ANSI_E,
+                CMD_KEY,
+                EventHotKeyID { signature, id: HOTKEY_ID_SCREENSHOT },
+                target,
+                0,
+                &mut ref_shot,
+            );
+            // 仅注册失败时输出，避免每次启动都打日志
+            if install_ret != 0 || ret_ball != 0 || ret_shot != 0 {
+                eprintln!(
+                    "[hotkey] 快捷键注册失败: InstallEventHandler={install_ret}, Cmd+D={ret_ball}, Cmd+E={ret_shot} (0=成功)"
+                );
+            }
         }
     }
 }
@@ -129,27 +182,40 @@ fn register_hotkey_cmd_d(app: AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn register_hotkey_windows(app: AppHandle) {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_CONTROL, VK_D};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_CONTROL, VK_D, VK_E};
     use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
     std::thread::spawn(move || unsafe {
+        // id=1: Ctrl+D → 切换浮动球；id=2: Ctrl+E → 截图提问
         RegisterHotKey(None, 1, MOD_CONTROL, VK_D.0 as u32).ok();
+        RegisterHotKey(None, 2, MOD_CONTROL, VK_E.0 as u32).ok();
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.message == WM_HOTKEY {
-                let visible = BALL_VISIBLE.load(Ordering::SeqCst);
-                if let Some(window) = app.webview_windows().get("main") {
-                    if visible {
-                        let _ = window.hide();
-                        BALL_VISIBLE.store(false, Ordering::SeqCst);
-                        sync_toggle_menu_item(&app, false);
-                    } else {
-                        let _ = window.show();
-                        BALL_VISIBLE.store(true, Ordering::SeqCst);
-                        sync_toggle_menu_item(&app, true);
-                        let ball_size_val = *BALL_SIZE.lock().unwrap();
-                        let full_size = ball_size_val + BALL_PADDING * 2;
-                        apply_circular_window_mask(window, full_size, "shortcut_toggle");
+                // WM_HOTKEY 的 wParam 即热键 id
+                match msg.wParam.0 as i32 {
+                    // Ctrl+D → 切换浮动球
+                    1 => {
+                        let visible = BALL_VISIBLE.load(Ordering::SeqCst);
+                        if let Some(window) = app.webview_windows().get("main") {
+                            if visible {
+                                let _ = window.hide();
+                                BALL_VISIBLE.store(false, Ordering::SeqCst);
+                                sync_toggle_menu_item(&app, false);
+                            } else {
+                                let _ = window.show();
+                                BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                sync_toggle_menu_item(&app, true);
+                                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                let full_size = ball_size_val + BALL_PADDING * 2;
+                                apply_circular_window_mask(window, full_size, "shortcut_toggle");
+                            }
+                        }
                     }
+                    // Ctrl+E → 截图提问
+                    2 => {
+                        space_screenshot::do_screenshot_and_emit(&app, "Ctrl+E");
+                    }
+                    _ => {}
                 }
             }
         }
@@ -158,6 +224,288 @@ fn register_hotkey_windows(app: AppHandle) {
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn register_hotkey_windows(_app: AppHandle) {}
+// ─────────────────────────────────────────────────────────────────────────────
+// 主屏截图：xcap 截主显示器 → base64 → 推送到聊天窗口预览（跨平台）
+// macOS 由 hotkey 模块 Cmd+E 触发，Windows 由 register_hotkey_windows Ctrl+E 触发，
+// 也可由 trigger_screenshot 命令触发。
+mod space_screenshot {
+    use super::*;
+
+    // 缓存最新截图，供 ChatView 发送时拉取
+    pub(crate) static LATEST_SCREENSHOT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+    // 是否已发起过授权请求：
+    // CGRequestScreenCaptureAccess 对同一 App 身份只弹一次窗，之后静默返回 false。
+    // 首次只弹窗（让用户在弹窗上确认）；再次触发仍未授权，说明弹窗已失效，才跳设置面板。
+    static PERMISSION_REQUESTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    // 设置面板是否已打开过：只引导一次，之后不再反复弹面板打扰用户
+    static SETTINGS_OPENED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    // macOS 屏幕录制权限 API（10.15+）
+    // 未授权时截屏 API 不报错，只返回「壁纸 + 本进程自己的窗口」，因此必须显式预检
+    #[cfg(target_os = "macos")]
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGRequestScreenCaptureAccess() -> bool;
+        // 查询单个按键当前是否按下。只读某一个键的状态，不建事件监听链，
+        // 因此不需要「输入监控」权限，也不会像 CGEventTap 那样触发媒体库权限弹窗。
+        fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
+    }
+
+    /// 长按空格触发截图的阈值（毫秒）
+    const LONG_PRESS_MS: u64 = 3000;
+    /// 按键状态轮询间隔（毫秒）
+    const POLL_INTERVAL_MS: u64 = 100;
+    /// kVK_Space
+    #[cfg(target_os = "macos")]
+    const KVK_SPACE: u16 = 0x31;
+
+    /// 空格键当前是否按下
+    #[cfg(target_os = "macos")]
+    fn is_space_down() -> bool {
+        // kCGEventSourceStateCombinedSessionState = 0
+        unsafe { CGEventSourceKeyState(0, KVK_SPACE) }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn is_space_down() -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SPACE};
+        // 返回值最高位为 1 表示当前处于按下状态
+        unsafe { (GetAsyncKeyState(VK_SPACE.0 as i32) as u16 & 0x8000) != 0 }
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    fn is_space_down() -> bool {
+        false
+    }
+
+    /// 启动「长按空格」监听线程：空格按住满 3 秒触发一次截图，松开后才允许再次触发。
+    ///
+    /// 注意：轮询只能观察按键，无法拦截。按住空格期间目标应用仍会收到连续的空格
+    /// 输入（编辑器里连打空格、浏览器里连续翻页），3 秒阈值只是把误触概率压低。
+    pub fn start_long_press_watcher(app: AppHandle) {
+        std::thread::spawn(move || {
+            // 用真实时间戳而不是累加计数：sleep(100ms) 的实际间隔略大于 100ms，
+            // 累加到「3000」时真实已过去 3.2~3.3 秒，等于偷偷抬高了阈值。
+            let mut press_start: Option<std::time::Instant> = None;
+            // 本次按住是否已触发过，避免一直按着反复截图
+            let mut fired = false;
+            // 已打印到第几秒，避免同一秒重复打日志
+            let mut logged_secs: u64 = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+                if is_space_down() {
+                    if fired {
+                        continue;
+                    }
+                    let start = *press_start.get_or_insert_with(std::time::Instant::now);
+                    let held = start.elapsed();
+                    let secs = held.as_secs();
+                    // 每满一秒打一条，正常打字的空格停留远不到 1 秒，不会污染日志
+                    if secs > logged_secs {
+                        logged_secs = secs;
+                        eprintln!("[screenshot] 空格已按住 {secs}s（满 3s 触发截图）");
+                    }
+                    if held >= std::time::Duration::from_millis(LONG_PRESS_MS) {
+                        fired = true;
+                        press_start = None;
+                        logged_secs = 0;
+                        do_screenshot_and_emit(&app, "长按空格 3s");
+                    }
+                } else {
+                    // 松开时记录实际按住时长，用来判断是「差一点没到阈值」还是「根本没按住」
+                    if let Some(start) = press_start.take() {
+                        let held_ms = start.elapsed().as_millis();
+                        if held_ms >= 500 && !fired {
+                            eprintln!(
+                                "[screenshot] 空格松开，实际按住 {held_ms}ms，未达 {LONG_PRESS_MS}ms 阈值，未触发"
+                            );
+                        }
+                    }
+                    logged_secs = 0;
+                    fired = false;
+                }
+            }
+        });
+    }
+
+    /// 是否已获得屏幕录制权限
+    #[cfg(target_os = "macos")]
+    pub fn has_screen_permission() -> bool {
+        unsafe { CGPreflightScreenCaptureAccess() }
+    }
+
+    /// 弹出系统授权请求（首次调用才会弹窗）
+    #[cfg(target_os = "macos")]
+    pub fn request_screen_permission() -> bool {
+        unsafe { CGRequestScreenCaptureAccess() }
+    }
+
+    /// 打开「隐私与安全性 → 屏幕录制」设置面板
+    #[cfg(target_os = "macos")]
+    pub fn open_screen_permission_settings() {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn has_screen_permission() -> bool {
+        true
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn request_screen_permission() -> bool {
+        true
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn open_screen_permission_settings() {}
+
+
+    /// 截取主显示器全屏 → "data:image/png;base64,..."
+    pub fn capture_main_screen() -> Result<String, String> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use xcap::Monitor;
+
+        let monitors = Monitor::all().map_err(|e| format!("枚举显示器失败: {e}"))?;
+        let primary = monitors
+            .into_iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .ok_or_else(|| "未找到主显示器".to_string())?;
+        let img = primary
+            .capture_image()
+            .map_err(|e| format!("截图失败: {e}"))?;
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .map_err(|e| format!("PNG 编码失败: {e}"))?;
+        let b64 = STANDARD.encode(buf.into_inner());
+        Ok(format!("data:image/png;base64,{b64}"))
+    }
+
+    /// 截图入口：直接截当前主显示器画面 → 推送到浮动球输入框预览
+    ///
+    /// `source` 仅用于日志，区分是哪条触发路径进来的（长按空格 / Cmd+E / 命令调用），
+    /// 排查「没反应」时能直接从日志判断是触发没到，还是到了却被权限挡住。
+    pub fn do_screenshot_and_emit(app: &AppHandle, source: &str) {
+        eprintln!("[screenshot] 触发源: {source}");
+        // 先查权限：未授权时截屏 API 会静默返回壁纸，必须拦在截图之前
+        if !has_screen_permission() {
+            // 首次：只弹系统授权确认框，不跳设置面板（避免打断用户在弹窗上点「允许」）
+            if !PERMISSION_REQUESTED.swap(true, Ordering::SeqCst) {
+                eprintln!("[screenshot] 缺少「屏幕录制」权限，已弹出系统授权确认框");
+                request_screen_permission();
+            } else if !SETTINGS_OPENED.swap(true, Ordering::SeqCst) {
+                // 第二次仍未授权：系统弹窗已失效（同一身份只弹一次），引导到设置面板。
+                // 只开一次——否则用户每按一次快捷键就被弹一个设置窗口，非常烦人。
+                eprintln!("[screenshot] 仍未授权，已打开系统设置面板（后续不再重复打开）");
+                open_screen_permission_settings();
+            }
+            if let Some(main_window) = app.webview_windows().get("main") {
+                let _ = main_window.show();
+                let _ = main_window.emit(
+                    "screenshot-permission-needed",
+                    // 输入框展开态仅 303px 宽，文案必须短，否则会被省略号截断。
+                    // 完整说明放在前端的 title 悬浮提示里。
+                    serde_json::json!({
+                        "message": "缺少屏幕录制权限"
+                    }),
+                );
+            }
+            return;
+        }
+
+        match capture_main_screen() {
+            Ok(data_url) => {
+                // 缓存供 ChatView 发送时拉取（图走后端 static，避免 base64 反复过 IPC）
+                if let Ok(mut slot) = LATEST_SCREENSHOT.lock() {
+                    *slot = Some(data_url.clone());
+                }
+                let app_clone = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    // 确保浮动球可见（Cmd+E 可能在任意应用下触发）
+                    if let Some(main_window) = app_clone.webview_windows().get("main") {
+                        let _ = main_window.show();
+                        let _ = main_window.set_focus();
+                        let _ = main_window.emit(
+                            "quick-screenshot-preview",
+                            serde_json::json!({ "imageBase64": data_url }),
+                        );
+                    }
+                });
+            }
+            Err(e) => eprintln!("[screenshot] 截图失败: {e}"),
+        }
+    }
+
+}
+
+/// 手动触发截图（供前端按钮/调试）
+#[tauri::command]
+async fn trigger_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    space_screenshot::do_screenshot_and_emit(&app, "手动调用");
+    Ok(())
+}
+
+/// 前端 ChatView 挂载后主动拉取待预览截图（解决 emit 早于 listen 注册的竞态）
+#[tauri::command]
+fn get_pending_screenshot() -> Option<String> {
+    space_screenshot::LATEST_SCREENSHOT
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+}
+
+/// 打开「屏幕录制」权限设置面板（由前端提示行点击触发）
+///
+/// 不受 SETTINGS_OPENED 闩锁限制：闩锁的目的是防止「每按一次快捷键就自动弹一个设置窗口」，
+/// 而这里是用户主动点击，必须每次都响应，否则用户没有任何途径进入授权界面。
+#[tauri::command]
+fn open_screen_recording_settings() {
+    space_screenshot::open_screen_permission_settings();
+}
+
+/// 清除待发送的截图（浮动球输入框删除图/收起时调用，避免残留）
+#[tauri::command]
+fn clear_pending_screenshot() {
+    if let Ok(mut slot) = space_screenshot::LATEST_SCREENSHOT.lock() {
+        *slot = None;
+    }
+}
+
+
+/// 点击缩略图查看大图：写入临时 PNG 后交系统默认看图工具打开
+#[tauri::command]
+fn open_screenshot_preview(data_url: String) -> Result<(), String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let b64 = data_url
+        .split(',')
+        .nth(1)
+        .ok_or_else(|| "data_url 格式不正确".to_string())?;
+    let bytes = STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    let path = std::env::temp_dir().join("aidi-screenshot-preview.png");
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("打开预览失败: {e}"))?;
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("cmd")
+        .args(["/C", "start", ""])
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("打开预览失败: {e}"))?;
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
@@ -3255,10 +3603,16 @@ pub fn run() {
                 }
 
             }
-            // 注册全局快捷键：Cmd+D (macOS) / Ctrl+D (Windows)
-            // 使用 Carbon RegisterEventHotKey，不触发 Apple Music 媒体库权限弹窗
+            // 注册全局快捷键：Cmd+D / Cmd+E (macOS，Carbon RegisterEventHotKey)
+            //                 Ctrl+D / Ctrl+E (Windows，Win32 RegisterHotKey)
+            // Cmd+D/Ctrl+D → 切换浮动球；Cmd+E/Ctrl+E → 截图提问
+            // macOS 用 Carbon 避免 Apple Music 媒体库权限弹窗
             let app_handle_hotkey = app.handle().clone();
             register_hotkey_cmd_d(app_handle_hotkey);
+
+            // 长按空格 3 秒 → 截图提问（与 Cmd+E/Ctrl+E 并存，同一套截图逻辑）
+            let app_handle_long_press = app.handle().clone();
+            space_screenshot::start_long_press_watcher(app_handle_long_press);
 
             // 拦截 optimizer 窗口关闭事件：隐藏而不是销毁
             if let Some(optimizer_window) = app.get_webview_window("optimizer") {
@@ -3340,6 +3694,11 @@ pub fn run() {
             hide_chat_window,
             close_chat_window,
             send_chat_message,
+            trigger_screenshot,
+            get_pending_screenshot,
+            clear_pending_screenshot,
+            open_screenshot_preview,
+            open_screen_recording_settings,
             update_chat_window_position,
             resize_chat_window,
             reset_chat_window_size,
