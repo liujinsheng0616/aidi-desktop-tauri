@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 始终使用中文回复用户。
 
+## 协作规范（最高优先级）
+
+- **技术决策权归用户**：用户是编程初学者（小白）。整个项目期间，凡涉及技术选型、技术方案、架构设计、工具/库选择、接口方案等**任何技术问题**，Claude 都必须先列出几个候选方案，逐一用通俗语言说明每个方案的优劣势，再由**用户拍板决定**。**严禁未经用户同意擅自定技术方案。**
+- **开发分支**：不在 `master` 分支开发，所有开发统一在 `dev` 分支进行。
+- **沟通语言**：始终使用中文回复用户。
+
+## 项目背景与迭代目标
+
+- AIDI 是一个桌面 AI 悬浮球助手，由 `tauri`（桌面端）和 `web`（页面）两部分组成。
+- 当前迭代：在 AIDI 中嵌入「客服智能体」（agent），实现对话能力。
+- **第一阶段目标**：实现「查询 wiki 的智能体」——调用飞书 wiki 搜索接口查询企业知识库并回答问题。
+  - 接口文档：https://open.feishu.cn/document/server-docs/docs/wiki-v2/search_wiki
+
 ## 项目概述
 
 AIDI Desktop 是基于 Tauri v2 + Vue 3 + TypeScript 构建的 macOS/Windows 浮动球助手。提供可拖拽、始终置顶的浮动球，支持吸附到屏幕边缘，并包含系统优化面板。
