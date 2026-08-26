@@ -33,7 +33,8 @@ const capsuleStyle = computed(() => {
   return {
     width: `${shellWidth.value}px`,
     height: `${h}px`,
-    borderRadius: `${Math.min(h / 2, 40)}px`, // 限制最大圆角
+    // 使用 9999px 确保任何宽高下都是完美椭圆，不会出现棱角
+    borderRadius: '9999px',
     '--theme-primary': currentTheme.primary,
     '--theme-glow': currentTheme.glow,
   }
@@ -53,6 +54,8 @@ async function handleInputExpand(expanded: boolean) {
 }
 
 // 监听输入框高度变化，调整窗口高度
+// 注意：QuickInputBox 的 autoResize 中 textareaHeight = Math.max(ballSize, actualH + 24)
+// 已包含模型选择条高度(+24)，所以这里直接使用传入的 height，不再额外加 24
 async function handleInputHeightChange(height: number) {
   inputBoxHeight.value = height
   await invoke('resize_input_window_height', { height })
@@ -271,9 +274,10 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-start;
-  padding-left: 0;
+  padding: 6px 0 0 0; /* 上边距 = BALL_PADDING，与窗口边距一致 */
+  box-sizing: border-box;
   background: transparent;
   pointer-events: none;
 }

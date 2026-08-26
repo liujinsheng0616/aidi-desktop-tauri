@@ -574,6 +574,8 @@ pub struct Settings {
     pub opacity: u32,
     pub color_theme: String,
     pub theme_mode: String,
+    #[serde(default)]
+    pub selected_model: String,
 }
 
 // ==================== EXTERNAL URL CONFIGURATION ====================
@@ -703,6 +705,7 @@ static POP_PROTECTION_TIMER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex:
 
 static BALL_SIZE: Mutex<u32> = Mutex::new(60);
 static THEME_MODE: Mutex<String> = Mutex::new(String::new());
+static SELECTED_MODEL: Mutex<String> = Mutex::new(String::new());
 const BALL_PADDING: u32 = 6; // 窗口尺寸 = ballSize + BALL_PADDING * 2，增加 6px 上下边距
 
 // Animation constants
@@ -1787,6 +1790,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                     let mut opacity: u32 = 100;
                                     let mut color_theme = String::from("cyan-purple");
                                     let mut theme_mode = String::from("system");
+                                    let mut selected_model = String::new();
                                     for pair in params_owned.split('&') {
                                         if let Some((k, v)) = pair.split_once('=') {
                                             match k {
@@ -1794,11 +1798,12 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                                 "opacity" => { opacity = v.parse().unwrap_or(100); }
                                                 "color_theme" => { color_theme = v.to_string(); }
                                                 "theme_mode" => { theme_mode = v.to_string(); }
+                                                "selected_model" => { selected_model = v.to_string(); }
                                                 _ => {}
                                             }
                                         }
                                     }
-                                    let settings = Settings { ball_size, opacity, color_theme, theme_mode };
+                                    let settings = Settings { ball_size, opacity, color_theme, theme_mode, selected_model };
                                     update_settings(app2, settings);
                                 }
                                 _ => {}
@@ -2812,8 +2817,25 @@ fn update_settings(app: tauri::AppHandle, settings: Settings) {
         let mut theme_mode = THEME_MODE.lock().unwrap();
         *theme_mode = settings.theme_mode.clone();
     }
+    // 保存 selected_model 供 ChatView 初始化时读取
+    {
+        let mut selected_model = SELECTED_MODEL.lock().unwrap();
+        *selected_model = settings.selected_model.clone();
+    }
 
     let _ = app.emit("settings-updated", settings);
+}
+
+/// 获取当前选中的模型 ID（供 ChatView 在 onMounted 时调用，
+/// 解决聊天窗口创建前 QuickInputBox 切换模型但 Tauri 事件丢失的时序问题）
+#[tauri::command]
+fn get_selected_model() -> String {
+    let model = SELECTED_MODEL.lock().unwrap();
+    if model.is_empty() {
+        "qwen".to_string()
+    } else {
+        model.clone()
+    }
 }
 
 /// 设置上报用户信息（供前端调用）
@@ -2880,7 +2902,8 @@ fn expand_input_window(app: tauri::AppHandle) {
         // 展开态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 输入框 240 + 边框 2 = 339px
         // 但实际前端 pill-shell 宽度为 303px，使用固定值以保持一致
         let window_width = 303u32;
-        let window_height = ball_size + BALL_PADDING * 2;
+        // 展开态高度：ballSize + 模型选择条(24px) + padding*2
+        let window_height = ball_size + 24 + BALL_PADDING * 2;
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
             width: window_width as f64,
             height: window_height as f64,
@@ -2915,8 +2938,14 @@ fn collapse_input_window(app: tauri::AppHandle) {
 fn resize_input_window_height(app: tauri::AppHandle, height: u32) {
     if let Some(main_window) = app.webview_windows().get("main") {
         let window_height = height + BALL_PADDING * 2;
+        // 使用 scale_factor 将物理像素转为逻辑像素，避免 Retina 屏上宽度翻倍
+        let scale = main_window.scale_factor().unwrap_or(1.0);
+        let current_width = main_window
+            .outer_size()
+            .map(|s| (s.width as f64) / scale)
+            .unwrap_or(303.0);
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
-            width: 303f64,
+            width: current_width,
             height: window_height as f64,
         }));
 
@@ -3655,6 +3684,7 @@ pub fn run() {
             show_submenu,
             hide_submenu,
             update_settings,
+            get_selected_model,
             set_report_user_info,
             trigger_report,
             update_window_size,
