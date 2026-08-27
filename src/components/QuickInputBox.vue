@@ -2,8 +2,6 @@
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit as emitTauriEvent, UnlistenFn } from '@tauri-apps/api/event'
-import { AVAILABLE_MODELS, getSelectedModel, getModelById } from '@/config/models'
-import { Check } from 'lucide-vue-next'
 
 const props = defineProps<{
   size?: number
@@ -27,51 +25,6 @@ const pendingScreenshot = ref<string | null>(null) // 截图 base64 data URL（�
 // 截图权限缺失提示：借 placeholder 显示，避免在小窗口里做浮层被窗口边界裁掉
 const permissionNotice = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
-
-// 模型选择下拉框状态
-const modelDropdownOpen = ref(false)
-const currentModelId = ref(getSelectedModel().id)
-const currentModel = computed(() => getModelById(currentModelId.value) ?? getSelectedModel())
-
-/** 切换模型下拉展开/收起 */
-async function toggleModelDropdown() {
-  if (modelDropdownOpen.value) {
-    closeModelDropdown()
-    return
-  }
-  // 先调整窗口高度（等待完成），再显示下拉框，避免窗口未及时 resize 导致下拉被裁剪
-  // textareaHeight 已含模型选择条(+24)，下拉框需要约 50px
-  const expandedH = textareaHeight.value + 56
-  await invoke('resize_input_window_height', { height: expandedH }).catch(() => {})
-  modelDropdownOpen.value = true
-}
-
-/** 选择模型：写入 localStorage + 通知 Rust 端 + emit Tauri 事件，关闭下拉 */
-function selectModel(modelId: string) {
-  currentModelId.value = modelId
-  closeModelDropdown()
-  // 写入 localStorage（同 origin 窗口可读）
-  try {
-    const saved = localStorage.getItem('aidi-settings')
-    const settings = saved ? JSON.parse(saved) : {}
-    settings.selectedModel = modelId
-    localStorage.setItem('aidi-settings', JSON.stringify(settings))
-  } catch {
-    // ignore
-  }
-  // 通知 Rust 端存储模型 ID（供 ChatView 初始化时通过 get_selected_model 读取）
-  invoke('update_settings', {
-    settings: {
-      ball_size: props.size ?? 60,
-      opacity: props.opacity ?? 100,
-      color_theme: props.colorTheme ?? 'cyan-purple',
-      theme_mode: 'system',
-      selected_model: modelId,
-    }
-  }).catch(() => {})
-  // 通过 Tauri 事件通知已存在的 ChatView（跨 origin 窗口 storage 事件不触发）
-  emitTauriEvent('model-changed', { modelId })
-}
 
 // 事件监听器清理函数
 let unlistenCollapse: UnlistenFn | null = null
@@ -152,32 +105,13 @@ function handleClickOutside(e: MouseEvent) {
   if (target.closest('.floating-ball')) {
     return
   }
-  // 点击模型选择条或下拉框区域不收起输入框
-  if (target.closest('.model-bar') || target.closest('.model-dropdown')) {
-    return
-  }
-  // 收起模型下拉框
-  if (modelDropdownOpen.value) {
-    closeModelDropdown()
-  }
   if (!target.closest('.quick-input-container')) {
     collapseInput()
   }
 }
 
-/** 关闭模型下拉框并恢复窗口高度 */
-function closeModelDropdown() {
-  modelDropdownOpen.value = false
-  // textareaHeight 已含模型选择条(+24)，直接使用
-  invoke('resize_input_window_height', { height: textareaHeight.value }).catch(() => {})
-}
-
 // 收起输入框
 function collapseInput() {
-  // 收起模型下拉框
-  if (modelDropdownOpen.value) {
-    modelDropdownOpen.value = false
-  }
   // 收起时清除待发截图（避免后端 static 残留，被下次纯文本消息误带）
   if (pendingScreenshot.value) {
     pendingScreenshot.value = null
@@ -223,7 +157,7 @@ function autoResize() {
   textarea.style.height = `${textareaActualHeight}px`
 
   // 计算容器高度（textarea 高度 + padding）
-  textareaHeight.value = Math.max(ballSize.value, textareaActualHeight + 24)
+  textareaHeight.value = Math.max(ballSize.value, textareaActualHeight)
 
   // 通知父组件高度变化
   emit('heightChange', textareaHeight.value)
@@ -420,30 +354,6 @@ onUnmounted(() => {
             </svg>
           </button>
         </div>
-
-        <!-- 模型选择条（紧贴输入框下方） -->
-        <div class="model-bar">
-          <div class="model-select" @click.stop="toggleModelDropdown">
-            <span class="model-select-name">{{ currentModel.name }}</span>
-            <svg class="model-select-arrow" :class="{ open: modelDropdownOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M6 9l6 6 6-6"/>
-            </svg>
-          </div>
-          <Transition name="dropdown">
-            <div v-if="modelDropdownOpen" class="model-dropdown">
-              <div
-                v-for="model in AVAILABLE_MODELS"
-                :key="model.id"
-                class="model-option"
-                :class="{ active: model.id === currentModelId }"
-                @click.stop="selectModel(model.id)"
-              >
-                <span class="model-option-name">{{ model.name }}</span>
-                <Check v-if="model.id === currentModelId" :size="14" class="model-option-check" />
-              </div>
-            </div>
-          </Transition>
-        </div>
       </div>
     </Transition>
   </div>
@@ -616,6 +526,7 @@ onUnmounted(() => {
 
 .chat-input::placeholder {
   color: rgba(255, 255, 255, 0.38);
+  text-align: center;
 }
 
 .chat-input:disabled {
@@ -718,102 +629,5 @@ onUnmounted(() => {
 
 .dark .input-icon {
   color: #6B7280;
-}
-
-/* 模型选择条 */
-.model-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  height: 24px;
-  background: transparent;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.model-select {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: background 0.15s ease;
-}
-
-.model-select:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.model-select-name {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.7);
-  font-weight: 500;
-}
-
-.model-select-arrow {
-  width: 12px;
-  height: 12px;
-  color: rgba(255, 255, 255, 0.5);
-  transition: transform 0.15s ease;
-}
-
-.model-select-arrow.open {
-  transform: rotate(180deg);
-}
-
-/* 下拉列表：向下展开，悬浮在模型条下方（窗口内） */
-.model-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 2px;
-  background: rgba(30, 30, 30, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  padding: 3px;
-  min-width: 120px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  z-index: 9999;
-}
-
-.model-option {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.model-option:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.model-option.active {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.model-option-name {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.85);
-  flex: 1;
-}
-
-.model-option-check {
-  color: rgba(255, 255, 255, 0.6);
-}
-
-/* 下拉过渡动画 */
-.dropdown-enter-active,
-.dropdown-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-
-.dropdown-enter-from,
-.dropdown-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
 }
 </style>

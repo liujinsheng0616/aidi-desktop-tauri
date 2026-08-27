@@ -2901,8 +2901,8 @@ fn expand_input_window(app: tauri::AppHandle) {
         // 展开态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 输入框 240 + 边框 2 = 339px
         // 但实际前端 pill-shell 宽度为 303px，使用固定值以保持一致
         let window_width = 303u32;
-        // 展开态高度：ballSize + 模型选择条(24px) + padding*2
-        let window_height = ball_size + 24 + BALL_PADDING * 2;
+        // 展开态高度：ballSize + padding*2
+        let window_height = ball_size + BALL_PADDING * 2;
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
             width: window_width as f64,
             height: window_height as f64,
