@@ -1111,14 +1111,13 @@ fn hide_main_window(app: tauri::AppHandle, window: tauri::Window) {
 fn rebuild_tray_menu(app: &tauri::AppHandle, is_logged_in: bool, ball_visible: bool) {
     if let Some(tray) = app.tray_by_id("main-tray") {
         if is_logged_in {
-            // 已登录菜单：打开AIDI、显示/隐藏浮动球、退出
+            // 已登录菜单：显示/隐藏浮动球、退出
             let toggle_label = if ball_visible { "隐藏浮动球" } else { "显示浮动球" };
-            if let (Ok(toggle_item), Ok(aigc_item), Ok(quit_item)) = (
+            if let (Ok(toggle_item), Ok(quit_item)) = (
                 MenuItem::with_id(app, "toggle", toggle_label, true, None::<&str>),
-                MenuItem::with_id(app, "aigc", "打开AIDI", true, None::<&str>),
                 MenuItem::with_id(app, "quit", "退出", true, None::<&str>),
             ) {
-                if let Ok(menu) = Menu::with_items(app, &[&aigc_item, &toggle_item, &quit_item]) {
+                if let Ok(menu) = Menu::with_items(app, &[&toggle_item, &quit_item]) {
                     let _ = tray.set_menu(Some(menu));
                 }
             }
@@ -3502,9 +3501,6 @@ pub fn run() {
                                         }
                                     } else {
                                     }
-                                }
-                                "aigc" => {
-                                    let _ = app.emit_to("main", "open-aigc", ());
                                 }
                                 _ => {}
                             }

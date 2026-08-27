@@ -5,7 +5,6 @@ import { listen } from '@tauri-apps/api/event'
 import FloatingBall from './components/FloatingBall.vue'
 import QuickInputBox from './components/QuickInputBox.vue'
 import { isLoggedIn, getUser, clearAuth } from './stores/auth'
-import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
 import { colorThemes } from './shared/colorThemes'
 
 const ballSize = ref(60)
@@ -61,8 +60,7 @@ async function handleInputHeightChange(height: number) {
   await invoke('resize_input_window_height', { height })
 }
 
-let isCreatingAigcWindow = false
-let unlistenOpenAigc: (() => void) | null = null
+
 
 function loadSettings() {
   const saved = localStorage.getItem('aidi-settings')
@@ -176,37 +174,6 @@ onMounted(async () => {
     await syncAuthToBackend()
   })
 
-  // 监听托盘"打开AIDI"事件
-  unlistenOpenAigc = await listen('open-aigc', async () => {
-    if (isCreatingAigcWindow) return
-    const fsUserId = getUser()?.fsUserId ?? ''
-    const appDomain = import.meta.env.VITE_APP_DOMAIN || 'https://aidi.yadea.com.cn'
-    const aigcUrl = `${appDomain}/aigc/#/login?userId=${fsUserId}`
-    const windows = await getAllWebviewWindows()
-    const existing = windows.find(w => w.label === 'aigc-window')
-    if (existing) {
-      await (existing as any).navigate(aigcUrl)
-      await existing.show()
-      await existing.setFocus()
-    } else {
-      isCreatingAigcWindow = true
-      const webview = new WebviewWindow('aigc-window', {
-        url: aigcUrl,
-        title: 'AIGC',
-        width: 1200,
-        height: 800,
-        center: true,
-        decorations: true,
-        resizable: true,
-        alwaysOnTop: false,
-      })
-      webview.once('tauri://created', () => { isCreatingAigcWindow = false })
-      webview.once('tauri://error', () => {
-        isCreatingAigcWindow = false
-      })
-    }
-  })
-
   // 监听 Rust 超时线程的重新检查请求（处理 Windows 上 WebView2 慢初始化场景）
   listen('request-login-check', async () => {
     if (initialized.value) return  // 已初始化，跳过
@@ -252,7 +219,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  unlistenOpenAigc?.()
   window.removeEventListener('storage', handleStorageChange)
 })
 </script>

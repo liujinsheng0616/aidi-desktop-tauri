@@ -2,8 +2,6 @@
 import { onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit } from '@tauri-apps/api/event'
-import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow'
-import { getUser } from '../stores/auth'
 import { colorThemes } from '../shared/colorThemes'
 
 const props = defineProps<{
@@ -33,10 +31,6 @@ let dragWindowReady = false // prepare_drag 是否已返回初始坐标
 let hasMoved = false
 const CLICK_THRESHOLD = 5 // 移动超过5像素认为是拖拽
 const CLICK_TIME_THRESHOLD = 350 // 按下超过350ms认为是拖拽（Windows IPC延迟较大，200ms过严）
-
-// 双击检测
-let lastClickTime = 0
-const DOUBLE_CLICK_THRESHOLD = 300 // 双击间隔时间（毫秒）
 
 // hover 状态
 let hoverTimeout: number | null = null
@@ -185,57 +179,10 @@ async function handleMouseUp() {
   document.removeEventListener('mousemove', handleMouseMove)
   document.removeEventListener('mouseup', handleMouseUp)
 
-  // 检测是否为双击（没有移动且时间很短）
+  // 单击悬浮球（没有移动且时间很短）：通知收起输入框
   const clickDuration = Date.now() - dragStartTime
   if (!hasMoved && clickDuration < CLICK_TIME_THRESHOLD) {
-    const now = Date.now()
-    const timeSinceLastClick = now - lastClickTime
-
-    if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD) {
-      // 是双击，打开窗口并重置计时器
-      lastClickTime = 0
-
-      try {
-        const windows = await getAllWebviewWindows()
-        const existingWindow = windows.find(w => w.label === 'aigc-window')
-
-        const fsUserId = getUser()?.fsUserId ?? ''
-        const appDomain = import.meta.env.VITE_APP_DOMAIN || 'https://aidi.yadea.com.cn'
-        const aigcUrl = `${appDomain}/aigc/#/login?userId=${fsUserId}`
-
-        if (existingWindow) {
-          // 窗口已存在，更新 URL 后显示并聚焦
-          await (existingWindow as any).navigate(aigcUrl)
-          await existingWindow.show()
-          await existingWindow.setFocus()
-        } else {
-          // 窗口不存在，创建新窗口
-          const webview = new WebviewWindow('aigc-window', {
-            url: aigcUrl,
-            title: 'AIGC',
-            width: 1200,
-            height: 800,
-            center: true,
-            decorations: true,
-            resizable: true,
-            alwaysOnTop: false
-          })
-          webview.once('tauri://created', () => {
-            // 窗口创建成功
-          })
-          webview.once('tauri://error', () => {
-            // 窗口创建失败，忽略
-          })
-        }
-      } catch (error) {
-        // 处理窗口错误，忽略
-      }
-    } else {
-      // 记录本次点击时间，等待可能的第二次点击
-      lastClickTime = now
-      // 单击悬浮球时，通知收起输入框
-      emit('collapse-input')
-    }
+    emit('collapse-input')
   }
 
   // 拖拽结束，检测边缘吸附
