@@ -21,7 +21,7 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const textareaHeight = ref(props.size || 60) // 动态高度，初始等于球高度
 const savedHeight = ref(0) // 保存收起前的高度
 const isSending = ref(false) // 发送中状态
-const pendingScreenshot = ref<string | null>(null) // 截图 base64 data URL（预览用）
+const pendingScreenshots = ref<string[]>([]) // 截图 base64 data URL 列表（支持多张）
 // 截图权限缺失提示：借 placeholder 显示，避免在小窗口里做浮层被窗口边界裁掉
 const permissionNotice = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
@@ -113,8 +113,8 @@ function handleClickOutside(e: MouseEvent) {
 // 收起输入框
 function collapseInput() {
   // 收起时清除待发截图（避免后端 static 残留，被下次纯文本消息误带）
-  if (pendingScreenshot.value) {
-    pendingScreenshot.value = null
+  if (pendingScreenshots.value.length > 0) {
+    pendingScreenshots.value = []
     invoke('clear_pending_screenshot').catch(() => {})
   }
   // 保存当前高度（非初始高度时才保存）
@@ -163,31 +163,34 @@ function autoResize() {
   emit('heightChange', textareaHeight.value)
 }
 
-// 移除截图预览
-function removeScreenshot() {
-  pendingScreenshot.value = null
-  invoke('clear_pending_screenshot').catch(() => {})
+// 移除截图预览（按索引删除单张）
+function removeScreenshot(index: number) {
+  pendingScreenshots.value.splice(index, 1)
+  if (pendingScreenshots.value.length === 0) {
+    invoke('clear_pending_screenshot').catch(() => {})
+  }
 }
 
 // 点击缩略图查看大图（交系统看图工具打开，可缩放）
-function openPreview() {
-  if (!pendingScreenshot.value) return
-  invoke('open_screenshot_preview', { dataUrl: pendingScreenshot.value }).catch(() => {})
+function openPreview(index: number) {
+  const dataUrl = pendingScreenshots.value[index]
+  if (!dataUrl) return
+  invoke('open_screenshot_preview', { dataUrl }).catch(() => {})
 }
 
 // 发送消息
 async function sendMessage() {
   const text = inputText.value.trim()
-  const hasImg = !!pendingScreenshot.value
+  const hasImg = pendingScreenshots.value.length > 0
   if ((!text && !hasImg) || isSending.value) return
 
   isSending.value = true
-  // 先清本地预览、再 await：collapseInput() 在 pendingScreenshot 非空时会调用
+  // 先清本地预览、再 await：collapseInput() 在有截图时会调用
   // clear_pending_screenshot 清空后端缓存。send_chat_message 期间可能要新建聊天窗口
   // 并加载远程页面，耗时较长，此间若用户点击别处触发收起，
   // 就会把 ChatView 尚未取走的截图清掉，导致只发出文字、图丢失。
-  const imgSnapshot = pendingScreenshot.value
-  pendingScreenshot.value = null
+  const imgSnapshot = [...pendingScreenshots.value]
+  pendingScreenshots.value = []
   try {
     // 调用 Rust 后端发送消息并显示聊天窗口
     // 注：截图走后端 static 缓存，ChatView 发送时主动拉取（多模态）
@@ -205,7 +208,7 @@ async function sendMessage() {
     inputRef.value?.focus()
   } catch (error) {
     // 发送失败：恢复截图预览，让用户能直接重试（后端缓存仍在，未被取走）
-    if (imgSnapshot) pendingScreenshot.value = imgSnapshot
+    if (imgSnapshot.length > 0) pendingScreenshots.value = imgSnapshot
     isSending.value = false
   }
 }
@@ -255,7 +258,7 @@ onMounted(async () => {
       if (noticeTimer) clearTimeout(noticeTimer)
       noticeTimer = null
       permissionNotice.value = null
-      pendingScreenshot.value = event.payload.imageBase64
+      pendingScreenshots.value.push(event.payload.imageBase64)
       if (!isExpanded.value) {
         toggleInput()
       } else {
@@ -308,10 +311,11 @@ onUnmounted(() => {
         }"
       >
         <div class="input-wrapper">
-          <!-- 截图缩略图预览（Cmd+E） -->
-          <div v-if="pendingScreenshot" class="screenshot-thumb">
-            <img :src="pendingScreenshot" alt="截图预览" title="点击查看大图" @click.stop="openPreview" />
-            <button class="thumb-remove" @click.stop="removeScreenshot" title="移除截图">×</button>
+          <!-- 截图缩略图预览（Cmd+E，支持多张） -->
+          <div v-for="(src, i) in pendingScreenshots" :key="i" class="screenshot-thumb">
+            <img :src="src" :alt="`截图预览 ${i + 1}`" :title="`第 ${i + 1} 张截图 — 点击查看大图`" @click.stop="openPreview(i)" />
+            <span class="thumb-index">{{ i + 1 }}</span>
+            <button class="thumb-remove" @click.stop="removeScreenshot(i)" title="移除截图">×</button>
           </div>
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/>
@@ -348,7 +352,7 @@ onUnmounted(() => {
             <span class="stop-icon" />
           </button>
           <!-- 发送按钮（有内容时显示） -->
-          <button v-else-if="inputText.trim() || pendingScreenshot" class="action-btn send-btn" @click.stop="sendMessage" title="发送">
+          <button v-else-if="inputText.trim() || pendingScreenshots.length > 0" class="action-btn send-btn" @click.stop="sendMessage" title="发送">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M5 12h14M13 6l6 6-6 6"/>
             </svg>
@@ -463,6 +467,23 @@ onUnmounted(() => {
 }
 .thumb-remove:hover {
   background: rgba(220, 38, 38, 0.9);
+}
+/* 缩略图序号角标（左下角，显示第几张） */
+.thumb-index {
+  position: absolute;
+  bottom: -2px;
+  left: -2px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: rgba(37, 99, 235, 0.9);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  padding: 0 3px;
+  pointer-events: none;
 }
 
 /* 截图权限缺失提示：占据输入框位置，5s 后自动恢复成输入框 */

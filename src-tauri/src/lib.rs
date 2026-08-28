@@ -231,8 +231,8 @@ fn register_hotkey_windows(_app: AppHandle) {}
 mod space_screenshot {
     use super::*;
 
-    // 缓存最新截图，供 ChatView 发送时拉取
-    pub(crate) static LATEST_SCREENSHOT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    // 缓存截图列表，供 ChatView 发送时拉取（支持多张）
+    pub(crate) static LATEST_SCREENSHOT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
     // 是否已发起过授权请求：
     // CGRequestScreenCaptureAccess 对同一 App 身份只弹一次窗，之后静默返回 false。
@@ -424,7 +424,7 @@ mod space_screenshot {
             Ok(data_url) => {
                 // 缓存供 ChatView 发送时拉取（图走后端 static，避免 base64 反复过 IPC）
                 if let Ok(mut slot) = LATEST_SCREENSHOT.lock() {
-                    *slot = Some(data_url.clone());
+                    slot.push(data_url.clone());
                 }
                 let app_clone = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -454,11 +454,11 @@ async fn trigger_screenshot(app: tauri::AppHandle) -> Result<(), String> {
 
 /// 前端 ChatView 挂载后主动拉取待预览截图（解决 emit 早于 listen 注册的竞态）
 #[tauri::command]
-fn get_pending_screenshot() -> Option<String> {
-    space_screenshot::LATEST_SCREENSHOT
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
+fn get_pending_screenshot() -> Vec<String> {
+    match space_screenshot::LATEST_SCREENSHOT.lock() {
+        Ok(mut slot) => std::mem::take(&mut *slot),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// 打开「屏幕录制」权限设置面板（由前端提示行点击触发）
@@ -474,7 +474,7 @@ fn open_screen_recording_settings() {
 #[tauri::command]
 fn clear_pending_screenshot() {
     if let Ok(mut slot) = space_screenshot::LATEST_SCREENSHOT.lock() {
-        *slot = None;
+        slot.clear();
     }
 }
 
