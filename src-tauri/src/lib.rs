@@ -2126,7 +2126,7 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
 static CHAT_WINDOW_CREATING: AtomicBool = AtomicBool::new(false);
 
 /// 创建聊天气泡窗口
-fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>) -> Result<tauri::WebviewWindow, tauri::Error> {
+fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>, enable_wiki_search: bool) -> Result<tauri::WebviewWindow, tauri::Error> {
     // 检查是否正在创建中
     if CHAT_WINDOW_CREATING.load(Ordering::SeqCst) {
         return Err(tauri::Error::WindowNotFound);
@@ -2138,7 +2138,7 @@ fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>) -> 
     let chat_url_str = match initial_message {
         Some(msg) => {
             let encoded = urlencoding::encode(msg);
-            format!("{}/#/chat?message={}", base_url, encoded)
+            format!("{}/#/chat?message={}&enable_wiki_search={}", base_url, encoded, enable_wiki_search)
         }
         None => format!("{}/#/chat", base_url)
     };
@@ -2244,8 +2244,9 @@ fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>) -> 
 
 /// 显示聊天窗口
 #[tauri::command]
-async fn show_chat_window(app: tauri::AppHandle, initial_message: Option<String>, visible: Option<bool>) {
+async fn show_chat_window(app: tauri::AppHandle, initial_message: Option<String>, visible: Option<bool>, enable_wiki_search: Option<bool>) {
     let should_show = visible.unwrap_or(true);
+    let wiki_enabled = enable_wiki_search.unwrap_or(false);
     // 如果窗口已存在，显示并更新位置
     if let Some(chat_window) = app.webview_windows().get("chat") {
         // 更新窗口位置到悬浮球窗口正下方
@@ -2275,11 +2276,15 @@ async fn show_chat_window(app: tauri::AppHandle, initial_message: Option<String>
 
         // 如果有初始消息，发送到聊天窗口
         if let Some(msg) = initial_message {
-            let _ = chat_window.emit("chat-initial-message", msg);
+            let payload = serde_json::json!({
+                "message": msg,
+                "enable_wiki_search": wiki_enabled,
+            });
+            let _ = chat_window.emit("chat-initial-message", payload);
         }
     } else {
         // 窗口不存在，创建新窗口
-        match create_chat_window(&app, initial_message.as_deref()) {
+        match create_chat_window(&app, initial_message.as_deref(), wiki_enabled) {
             Ok(w) => {
                 if should_show {
                     let _ = w.show();
@@ -2362,9 +2367,9 @@ fn close_chat_window(app: tauri::AppHandle) {
 
 /// 发送聊天消息并显示聊天窗口
 #[tauri::command]
-async fn send_chat_message(app: tauri::AppHandle, message: String) {
+async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_search: Option<bool>) {
     // 显示聊天窗口并传入初始消息
-    show_chat_window(app, Some(message), Some(true)).await;
+    show_chat_window(app, Some(message), Some(true), enable_wiki_search).await;
 }
 
 /// 更新聊天窗口位置（当悬浮球移动时调用）

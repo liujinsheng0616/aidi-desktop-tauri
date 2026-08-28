@@ -22,6 +22,7 @@ const textareaHeight = ref(props.size || 60) // 动态高度，初始等于球�
 const savedHeight = ref(0) // 保存收起前的高度
 const isSending = ref(false) // 发送中状态
 const pendingScreenshots = ref<string[]>([]) // 截图 base64 data URL 列表（支持多张）
+const isWikiActive = ref(false) // IT 数据库检索开关
 // 截图权限缺失提示：借 placeholder 显示，避免在小窗口里做浮层被窗口边界裁掉
 const permissionNotice = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
@@ -194,8 +195,10 @@ async function sendMessage() {
   try {
     // 调用 Rust 后端发送消息并显示聊天窗口
     // 注：截图走后端 static 缓存，ChatView 发送时主动拉取（多模态）
-    await invoke('send_chat_message', { message: text })
+    await invoke('send_chat_message', { message: text, enableWikiSearch: isWikiActive.value })
     inputText.value = ''
+    // 发送成功后重置 IT 数据库按钮状态
+    isWikiActive.value = false
     // 发送后重置高度和 textarea DOM 样式，光标回到初始位置
     textareaHeight.value = ballSize.value
     savedHeight.value = 0
@@ -347,6 +350,15 @@ onUnmounted(() => {
             @keydown="handleKeydown"
             @input="autoResize"
           />
+          <!-- IT 数据库检索切换按钮 -->
+          <button
+            class="wiki-toggle-btn"
+            :class="{ 'wiki-toggle-btn--active': isWikiActive }"
+            :title="isWikiActive ? 'IT数据库已开启（点击关闭）' : '开启IT数据库检索'"
+            @click.stop="isWikiActive = !isWikiActive"
+          >
+            <span class="wiki-toggle-label">IT数据库</span>
+          </button>
           <!-- 停止按钮（发送中） -->
           <button v-if="isSending" class="action-btn stop-btn" @click.stop="stopMessage" title="停止">
             <span class="stop-icon" />
@@ -572,6 +584,44 @@ onUnmounted(() => {
 
 .action-btn:active {
   transform: scale(0.88);
+}
+
+/* IT 数据库切换按钮 */
+.wiki-toggle-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  transition: all 150ms ease;
+}
+
+.wiki-toggle-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.wiki-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.wiki-toggle-btn--active {
+  background: rgba(37, 99, 235, 0.25);
+  border-color: rgba(37, 99, 235, 0.6);
+  color: rgba(147, 197, 253, 1);
+}
+
+.wiki-toggle-btn--active:hover {
+  background: rgba(37, 99, 235, 0.35);
 }
 
 /* 发送按钮 */
