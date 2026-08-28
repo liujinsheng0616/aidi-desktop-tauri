@@ -2372,6 +2372,33 @@ async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_s
     show_chat_window(app, Some(message), Some(true), enable_wiki_search).await;
 }
 
+/// 在系统默认浏览器中打开外部链接
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "cmd";
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(cmd)
+            .args(["/c", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(cmd)
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+    }
+    Ok(())
+}
+
 /// 更新聊天窗口位置（当悬浮球移动时调用）
 #[tauri::command]
 fn update_chat_window_position(app: tauri::AppHandle) {
@@ -3725,6 +3752,7 @@ pub fn run() {
             hide_chat_window,
             close_chat_window,
             send_chat_message,
+            open_external_url,
             trigger_screenshot,
             get_pending_screenshot,
             clear_pending_screenshot,
