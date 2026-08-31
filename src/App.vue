@@ -42,7 +42,7 @@ const capsuleStyle = computed(() => {
 async function handleInputExpand(expanded: boolean) {
   isInputExpanded.value = expanded
   if (expanded) {
-    shellWidth.value = 383 // 展开态
+    shellWidth.value = 463 // 展开态
     await invoke('expand_input_window')
   } else {
     // 先让前端宽度动画完成
