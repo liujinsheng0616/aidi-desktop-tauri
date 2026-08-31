@@ -261,6 +261,8 @@ onMounted(async () => {
       if (noticeTimer) clearTimeout(noticeTimer)
       noticeTimer = null
       permissionNotice.value = null
+      // 最多允许 10 张截图，超出则忽略
+      if (pendingScreenshots.value.length >= 10) return
       pendingScreenshots.value.push(event.payload.imageBase64)
       if (!isExpanded.value) {
         toggleInput()
