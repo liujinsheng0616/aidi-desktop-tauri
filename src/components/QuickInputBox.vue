@@ -85,7 +85,7 @@ function toggleInput() {
           const textareaActualHeight = savedHeight.value - 24
           inputRef.value.style.height = `${textareaActualHeight}px`
           // 判断是否需要滚动条
-          inputRef.value.style.overflowY = textareaActualHeight >= 100 ? 'auto' : 'hidden'
+          inputRef.value.style.overflowY = textareaActualHeight >= 140 ? 'auto' : 'hidden'
         }
         emit('heightChange', textareaHeight.value)
       } else if (inputText.value) {
@@ -143,7 +143,7 @@ function autoResize() {
   // 先重置高度以获取真实的 scrollHeight
   textarea.style.height = 'auto'
   const scrollHeight = textarea.scrollHeight
-  const maxHeight = 100 // 约 5 行
+  const maxHeight = 140 // 约 7 行
 
   let textareaActualHeight: number
   if (scrollHeight <= maxHeight) {
@@ -270,8 +270,11 @@ onMounted(async () => {
       if (noticeTimer) clearTimeout(noticeTimer)
       noticeTimer = null
       permissionNotice.value = null
-      // 最多允许 10 张截图，超出则忽略
-      if (pendingScreenshots.value.length >= 10) return
+      // 最多允许 8 张截图，超出则提示
+      if (pendingScreenshots.value.length >= 8) {
+        showPermissionNotice('最多只能添加 8 张截图')
+        return
+      }
       pendingScreenshots.value.push(event.payload.imageBase64)
       if (!isExpanded.value) {
         toggleInput()
@@ -580,7 +583,7 @@ onUnmounted(() => {
   letter-spacing: 0.01em;
   resize: none;
   line-height: 1.5;
-  min-height: 20px;
+  min-height: 28px;
 }
 
 .chat-input::placeholder {
