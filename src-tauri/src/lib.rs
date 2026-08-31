@@ -2146,7 +2146,7 @@ fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>, ena
     let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
     let builder = tauri::WebviewWindowBuilder::new(app, "chat", blank_url)
         .title("AIDI 聊天")
-        .inner_size(320.0, 428.0)  // 280px + padding + 8px 尖头区域
+        .inner_size(380.0, 428.0)  // 输入框加宽后同步增大窗口
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
@@ -2349,7 +2349,7 @@ fn reset_chat_window_size(app: tauri::AppHandle) -> Result<(), String> {
 
     // 设置大小后，Resized 事件会自动更新位置
     chat_window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-        width: 320.0,
+        width: 380.0,
         height: 428.0,
     })).map_err(|e| format!("Failed to reset size: {:?}", e))?;
     Ok(())
@@ -2930,9 +2930,9 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
 fn expand_input_window(app: tauri::AppHandle) {
     if let Some(main_window) = app.webview_windows().get("main") {
         let ball_size = *BALL_SIZE.lock().unwrap();
-        // 展开态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 输入框 240 + 边框 2 = 339px
-        // 但实际前端 pill-shell 宽度为 303px，使用固定值以保持一致
-        let window_width = 303u32;
+        // 展开态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 输入框 320 + 边框 2 = 419px
+        // 使用固定值以保持一致
+        let window_width = 383u32;
         // 展开态高度：ballSize + padding*2
         let window_height = ball_size + BALL_PADDING * 2;
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
@@ -2974,7 +2974,7 @@ fn resize_input_window_height(app: tauri::AppHandle, height: u32) {
         let current_width = main_window
             .outer_size()
             .map(|s| (s.width as f64) / scale)
-            .unwrap_or(303.0);
+            .unwrap_or(383.0);
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
             width: current_width,
             height: window_height as f64,
