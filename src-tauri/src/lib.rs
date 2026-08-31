@@ -2839,6 +2839,29 @@ fn menu_force_repaint(app: tauri::AppHandle, submenu_expanded: bool) {
 
 // ==================== SETTINGS ====================
 
+/// 持久化设置文件的完整路径
+fn settings_file_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_config_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("settings.json"))
+}
+
+/// 把 Settings 写入磁盘（持久化）
+fn persist_settings(app: &tauri::AppHandle, settings: &Settings) {
+    if let Some(path) = settings_file_path(app) {
+        if let Ok(json) = serde_json::to_string_pretty(settings) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+}
+
+/// 从磁盘读取持久化的 Settings（启动时恢复用）
+fn load_persisted_settings(app: &tauri::AppHandle) -> Option<Settings> {
+    let path = settings_file_path(app)?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<Settings>(&content).ok()
+}
+
 #[tauri::command]
 fn update_settings(app: tauri::AppHandle, settings: Settings) {
     // Update ball size
@@ -2856,6 +2879,9 @@ fn update_settings(app: tauri::AppHandle, settings: Settings) {
         let mut selected_model = SELECTED_MODEL.lock().unwrap();
         *selected_model = settings.selected_model.clone();
     }
+
+    // 持久化到磁盘，重启后可恢复
+    persist_settings(&app, &settings);
 
     let _ = app.emit("settings-updated", settings);
 }
@@ -3437,6 +3463,22 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                // 从磁盘恢复持久化的设置（模型选择、球大小、主题等）
+                if let Some(saved) = load_persisted_settings(app.handle()) {
+                    {
+                        let mut ball_size = BALL_SIZE.lock().unwrap();
+                        *ball_size = saved.ball_size;
+                    }
+     {
+                        let mut theme_mode = THEME_MODE.lock().unwrap();
+                        *theme_mode = saved.theme_mode.clone();
+                    }
+                    {
+                        let mut selected_model = SELECTED_MODEL.lock().unwrap();
+                        *selected_model = saved.selected_model.clone();
+                    }
+                }
+
                 // 监听 deep link 事件
                 let app_handle = app.handle().clone();
                 use tauri_plugin_deep_link::DeepLinkExt;
