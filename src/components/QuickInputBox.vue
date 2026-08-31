@@ -158,7 +158,7 @@ function autoResize() {
   textarea.style.height = `${textareaActualHeight}px`
 
   // 计算截图行高度（如果有截图，需要额外空间）
-  const screenshotRow = textarea.closest('.input-box')?.querySelector('.screenshot-row') as HTMLElement | null
+  const screenshotRow = textarea.closest('.input-left')?.querySelector('.screenshot-row') as HTMLElement | null
   let screenshotHeight = 0
   if (screenshotRow) {
     screenshotHeight = screenshotRow.offsetHeight + 4 // 4px gap
@@ -327,54 +327,58 @@ onUnmounted(() => {
           height: `${textareaHeight}px`
         }"
       >
-        <!-- 截图缩略图预览区（可换行，不挤压输入区） -->
-        <div v-if="pendingScreenshots.length > 0" class="screenshot-row">
-          <div v-for="(src, i) in pendingScreenshots" :key="i" class="screenshot-thumb">
-            <img :src="src" :alt="`截图预览 ${i + 1}`" :title="`第 ${i + 1} 张截图 — 点击查看大图`" @click.stop="openPreview(i)" />
-            <span class="thumb-index">{{ i + 1 }}</span>
-            <button class="thumb-remove" @click.stop="removeScreenshot(i)" title="移除截图">×</button>
+        <div class="input-left">
+          <!-- 截图缩略图预览区（可换行，不挤压输入区） -->
+          <div v-if="pendingScreenshots.length > 0" class="screenshot-row">
+            <div v-for="(src, i) in pendingScreenshots" :key="i" class="screenshot-thumb">
+              <img :src="src" :alt="`截图预览 ${i + 1}`" :title="`第 ${i + 1} 张截图 — 点击查看大图`" @click.stop="openPreview(i)" />
+              <span class="thumb-index">{{ i + 1 }}</span>
+              <button class="thumb-remove" @click.stop="removeScreenshot(i)" title="移除截图">×</button>
+            </div>
+          </div>
+          <div class="input-wrapper">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="M21 21l-4.35-4.35"/>
+            </svg>
+            <!-- 截图权限缺失提示（替换输入框，5s 后自动恢复） -->
+            <!-- 点击打开系统设置面板；title 承载完整说明（提示行宽度有限，只放短文案） -->
+            <div
+              v-if="permissionNotice"
+              class="permission-notice"
+              title="需要「屏幕录制」权限才能截图。点击打开「系统设置 → 隐私与安全性 → 屏幕录制」，勾选 AIDI 后重启应用。"
+              @click.stop="openPermissionSettings"
+            >
+              <svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 8v4M12 16h.01"/>
+              </svg>
+              <span class="notice-text">{{ permissionNotice }}</span>
+              <span class="notice-action">点击授权</span>
+            </div>
+            <textarea
+              v-else
+              ref="inputRef"
+              v-model="inputText"
+              class="chat-input"
+              placeholder="AIDI 一下，你就知道~"
+              rows="1"
+              :disabled="isSending"
+              @keydown="handleKeydown"
+              @input="autoResize"
+            />
+            <!-- IT 数据库检索切换按钮 -->
+            <button
+              class="wiki-toggle-btn"
+              :class="{ 'wiki-toggle-btn--active': isWikiActive }"
+              :title="isWikiActive ? 'IT数据库已开启（点击关闭）' : '开启IT数据库检索'"
+              @click.stop="isWikiActive = !isWikiActive"
+            >
+              <span class="wiki-toggle-label">IT数据库</span>
+            </button>
           </div>
         </div>
-        <div class="input-wrapper">
-          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"/>
-            <path d="M21 21l-4.35-4.35"/>
-          </svg>
-          <!-- 截图权限缺失提示（替换输入框，5s 后自动恢复） -->
-          <!-- 点击打开系统设置面板；title 承载完整说明（提示行宽度有限，只放短文案） -->
-          <div
-            v-if="permissionNotice"
-            class="permission-notice"
-            title="需要「屏幕录制」权限才能截图。点击打开「系统设置 → 隐私与安全性 → 屏幕录制」，勾选 AIDI 后重启应用。"
-            @click.stop="openPermissionSettings"
-          >
-            <svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M12 8v4M12 16h.01"/>
-            </svg>
-            <span class="notice-text">{{ permissionNotice }}</span>
-            <span class="notice-action">点击授权</span>
-          </div>
-          <textarea
-            v-else
-            ref="inputRef"
-            v-model="inputText"
-            class="chat-input"
-            placeholder="AIDI 一下，你就知道~"
-            rows="1"
-            :disabled="isSending"
-            @keydown="handleKeydown"
-            @input="autoResize"
-          />
-          <!-- IT 数据库检索切换按钮 -->
-          <button
-            class="wiki-toggle-btn"
-            :class="{ 'wiki-toggle-btn--active': isWikiActive }"
-            :title="isWikiActive ? 'IT数据库已开启（点击关闭）' : '开启IT数据库检索'"
-            @click.stop="isWikiActive = !isWikiActive"
-          >
-            <span class="wiki-toggle-label">IT数据库</span>
-          </button>
+        <div class="input-right">
           <!-- 停止按钮（发送中） -->
           <button v-if="isSending" class="action-btn stop-btn" @click.stop="stopMessage" title="停止">
             <span class="stop-icon" />
@@ -435,8 +439,23 @@ onUnmounted(() => {
   border-radius: 0;
   background: transparent;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   padding: 0 12px 0 8px;
+}
+
+.input-left {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.input-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-left: 4px;
 }
 
 .input-wrapper {
