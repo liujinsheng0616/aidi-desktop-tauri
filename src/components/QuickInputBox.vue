@@ -23,7 +23,6 @@ const savedHeight = ref(0) // 保存收起前的高度
 const isSending = ref(false) // 发送中状态
 const pendingScreenshots = ref<string[]>([]) // 截图 base64 data URL 列表（支持多张）
 const isWikiActive = ref(false) // IT 数据库检索开关
-const screenshotLimitNotice = ref<string | null>(null) // 截图超限提示（独立于权限提示）
 // 截图权限缺失提示：借 placeholder 显示，避免在小窗口里做浮层被窗口边界裁掉
 const permissionNotice = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
@@ -271,17 +270,8 @@ onMounted(async () => {
       if (noticeTimer) clearTimeout(noticeTimer)
       noticeTimer = null
       permissionNotice.value = null
-      screenshotLimitNotice.value = null
-      // 最多允许 8 张截图，超出则提示
-      if (pendingScreenshots.value.length >= 8) {
-        screenshotLimitNotice.value = '最多只能添加 8 张截图'
-        if (noticeTimer) clearTimeout(noticeTimer)
-        noticeTimer = setTimeout(() => {
-          screenshotLimitNotice.value = null
-          noticeTimer = null
-        }, 3000)
-        return
-      }
+      // 最多允许 9 张截图，超出则忽略
+      if (pendingScreenshots.value.length >= 9) return
       pendingScreenshots.value.push(event.payload.imageBase64)
       if (!isExpanded.value) {
         toggleInput()
@@ -350,12 +340,6 @@ onUnmounted(() => {
             <circle cx="11" cy="11" r="8"/>
             <path d="M21 21l-4.35-4.35"/>
           </svg>
-          <!-- 截图超限提示（短暂显示，3s 后自动消失） -->
-          <Transition name="fade">
-            <div v-if="screenshotLimitNotice" class="screenshot-limit-notice">
-              {{ screenshotLimitNotice }}
-            </div>
-          </Transition>
           <!-- 截图权限缺失提示（替换输入框，5s 后自动恢复） -->
           <!-- 点击打开系统设置面板；title 承载完整说明（提示行宽度有限，只放短文案） -->
           <div
@@ -665,29 +649,6 @@ onUnmounted(() => {
 
 .wiki-toggle-btn--active:hover {
   background: rgba(37, 99, 235, 0.35);
-}
-
-/* 截图超限提示 */
-.screenshot-limit-notice {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.85);
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 10;
-}
-
-.fade-enter-active, .fade-leave-active {
-  transition: opacity 200ms ease;
-}
-.fade-enter-from, .fade-leave-to {
-  opacity: 0;
 }
 
 /* 发送按钮 */
