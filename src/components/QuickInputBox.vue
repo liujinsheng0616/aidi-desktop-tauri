@@ -431,7 +431,7 @@ onUnmounted(() => {
 
 /* 输入框容器 — 融入胶囊，无独立背景 */
 .input-box {
-  width: 240px;
+  width: 300px;
   border-radius: 0;
   background: transparent;
   display: flex;
@@ -705,7 +705,7 @@ onUnmounted(() => {
   }
   to {
     opacity: 1;
-    width: 240px;
+    width: 300px;
     transform: translateX(0);
   }
 }
