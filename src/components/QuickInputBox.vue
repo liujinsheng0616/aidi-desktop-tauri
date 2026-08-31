@@ -579,7 +579,7 @@ onUnmounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
   letter-spacing: 0.01em;
   resize: none;
-  line-height: 1.5;
+  line-height: 28px;
   min-height: 28px;
 }
 
@@ -587,7 +587,6 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.38);
   text-align: center;
   font-size: 14px;
-  line-height: 28px;
 }
 
 .chat-input:disabled {
