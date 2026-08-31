@@ -2898,6 +2898,130 @@ fn get_selected_model() -> String {
     }
 }
 
+// ==================== AUTO UPDATE ====================
+
+const UPDATE_MANIFEST_URL: &str = "https://oss.yadea.com.cn/aidiDesktop/latest.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UpdatePlatform {
+    url: String,
+    size: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateManifest {
+    version: String,
+    release_notes: String,
+    macos: UpdatePlatform,
+    #[allow(dead_code)]
+    windows: UpdatePlatform,
+}
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    has_update: bool,
+    current_version: String,
+    latest_version: String,
+    release_notes: String,
+    download_url: String,
+    download_size: u64,
+}
+
+/// 比较版本号：latest > current 返回 true
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.trim_start_matches('v')
+            .split('.')
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv > cv { return true; }
+        if lv < cv { return false; }
+    }
+    false
+}
+
+/// 检查是否有新版本（供前端调用）
+#[tauri::command]
+async fn check_update() -> Result<UpdateInfo, String> {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let resp = reqwest::get(UPDATE_MANIFEST_URL)
+        .await
+        .map_err(|e| format!("请求版本清单失败: {}", e))?;
+    let manifest: UpdateManifest = resp.json()
+        .await
+        .map_err(|e| format!("解析版本清单失败: {}", e))?;
+
+    let has_update = version_is_newer(&manifest.version, &current_version);
+
+    #[cfg(target_os = "macos")]
+    let platform = &manifest.macos;
+    #[cfg(target_os = "windows")]
+    let platform = &manifest.windows;
+
+    Ok(UpdateInfo {
+        has_update,
+        current_version,
+        latest_version: manifest.version,
+        release_notes: manifest.release_notes,
+        download_url: platform.url.clone(),
+        download_size: platform.size,
+    })
+}
+
+/// 下载安装包并调起安装（供前端调用）
+#[tauri::command]
+async fn download_and_install_update(
+    app: tauri::AppHandle,
+    download_url: String,
+) -> Result<(), String> {
+    let tmp_dir = std::env::temp_dir();
+    let ext = if cfg!(target_os = "macos") { ".dmg" } else { ".exe" };
+    let save_path = tmp_dir.join(format!(
+        "aidi-update-{}{}",
+        chrono::Utc::now().timestamp(),
+        ext
+    ));
+
+    let resp = reqwest::get(&download_url)
+        .await
+        .map_err(|e| format!("下载失败: {}", e))?;
+    let bytes = resp.bytes()
+        .await
+        .map_err(|e| format!("读取下载内容失败: {}", e))?;
+    std::fs::write(&save_path, &bytes)
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&save_path)
+            .spawn()
+            .map_err(|e| format!("打开安装包失败: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(&save_path)
+            .spawn()
+            .map_err(|e| format!("打开安装包失败: {}", e))?;
+    }
+
+    // 延迟退出，确保安装程序已启动
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        app_handle.exit(0);
+    });
+
+    Ok(())
+}
+
 /// 设置上报用户信息（供前端调用）
 #[tauri::command]
 fn set_report_user_info(user_code: String, user_name: String) {
@@ -3808,6 +3932,8 @@ pub fn run() {
             reset_chat_window_size,
             feishu::auth::feishu_login,
             feishu::bitable::feishu_report_device,
+            check_update,
+            download_and_install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
