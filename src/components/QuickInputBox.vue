@@ -157,8 +157,15 @@ function autoResize() {
   // 设置 textarea 实际高度
   textarea.style.height = `${textareaActualHeight}px`
 
-  // 计算容器高度（textarea 高度 + padding）
-  textareaHeight.value = Math.max(ballSize.value, textareaActualHeight)
+  // 计算截图行高度（如果有截图，需要额外空间）
+  const screenshotRow = textarea.closest('.input-box')?.querySelector('.screenshot-row') as HTMLElement | null
+  let screenshotHeight = 0
+  if (screenshotRow) {
+    screenshotHeight = screenshotRow.offsetHeight + 4 // 4px gap
+  }
+
+  // 计算容器高度（textarea 高度 + 截图行高度）
+  textareaHeight.value = Math.max(ballSize.value, textareaActualHeight + screenshotHeight)
 
   // 通知父组件高度变化
   emit('heightChange', textareaHeight.value)
@@ -170,6 +177,8 @@ function removeScreenshot(index: number) {
   if (pendingScreenshots.value.length === 0) {
     invoke('clear_pending_screenshot').catch(() => {})
   }
+  // 截图行变化后重算容器高度
+  nextTick(() => autoResize())
 }
 
 // 点击缩略图查看大图（交系统看图工具打开，可缩放）
@@ -267,7 +276,10 @@ onMounted(async () => {
       if (!isExpanded.value) {
         toggleInput()
       } else {
-        nextTick(() => inputRef.value?.focus())
+        nextTick(() => {
+          inputRef.value?.focus()
+          autoResize() // 截图行变化后重算容器高度
+        })
       }
     }
   })
@@ -315,13 +327,15 @@ onUnmounted(() => {
           height: `${textareaHeight}px`
         }"
       >
-        <div class="input-wrapper">
-          <!-- 截图缩略图预览（Cmd+E，支持多张） -->
+        <!-- 截图缩略图预览区（可换行，不挤压输入区） -->
+        <div v-if="pendingScreenshots.length > 0" class="screenshot-row">
           <div v-for="(src, i) in pendingScreenshots" :key="i" class="screenshot-thumb">
             <img :src="src" :alt="`截图预览 ${i + 1}`" :title="`第 ${i + 1} 张截图 — 点击查看大图`" @click.stop="openPreview(i)" />
             <span class="thumb-index">{{ i + 1 }}</span>
             <button class="thumb-remove" @click.stop="removeScreenshot(i)" title="移除截图">×</button>
           </div>
+        </div>
+        <div class="input-wrapper">
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/>
             <path d="M21 21l-4.35-4.35"/>
@@ -431,6 +445,15 @@ onUnmounted(() => {
   width: 100%;
   flex: 1;
   gap: 8px;
+}
+
+/* 截图缩略图行 — 可换行，不挤占输入区 */
+.screenshot-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0;
+  width: 100%;
 }
 
 .input-icon {
@@ -547,6 +570,7 @@ onUnmounted(() => {
 
 .chat-input {
   flex: 1;
+  min-width: 0;
   border: none;
   outline: none;
   background: transparent;
