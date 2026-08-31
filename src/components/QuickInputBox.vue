@@ -327,7 +327,7 @@ onUnmounted(() => {
           height: `${textareaHeight}px`
         }"
       >
-        <!-- 截图缩略图预览区（可换行，不挤压输入区） -->
+        <!-- 截图缩略图预览区（绝对定位浮于上方，不干扰输入区垂直居中） -->
         <div v-if="pendingScreenshots.length > 0" class="screenshot-row">
           <div v-for="(src, i) in pendingScreenshots" :key="i" class="screenshot-thumb">
             <img :src="src" :alt="`截图预览 ${i + 1}`" :title="`第 ${i + 1} 张截图 — 点击查看大图`" @click.stop="openPreview(i)" />
@@ -437,6 +437,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding: 0 12px 0 8px;
+  position: relative;
 }
 
 .input-wrapper {
@@ -444,16 +445,20 @@ onUnmounted(() => {
   align-items: center;
   width: 100%;
   flex: 1;
+  height: 100%;
   gap: 8px;
 }
 
-/* 截图缩略图行 — 可换行，不挤占输入区 */
+/* 截图缩略图行 — 绝对定位浮于上方，不干扰输入区垂直居中 */
 .screenshot-row {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  right: 8px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 4px 0;
-  width: 100%;
+  z-index: 5;
 }
 
 .input-icon {
