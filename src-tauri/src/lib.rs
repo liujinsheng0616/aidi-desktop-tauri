@@ -423,8 +423,11 @@ mod space_screenshot {
         match capture_main_screen() {
             Ok(data_url) => {
                 // 缓存供 ChatView 发送时拉取（图走后端 static，避免 base64 反复过 IPC）
+                // 与前端 QuickInputBox 的 9 张上限保持一致，后端也限制，避免前端不显示但后端多缓存
                 if let Ok(mut slot) = LATEST_SCREENSHOT.lock() {
-                    slot.push(data_url.clone());
+                    if slot.len() < 9 {
+                        slot.push(data_url.clone());
+                    }
                 }
                 let app_clone = app.clone();
                 tauri::async_runtime::spawn(async move {
