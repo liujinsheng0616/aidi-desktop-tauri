@@ -67,7 +67,7 @@
     "resources": ["scripts/*", "icons/tray-icon.png"],
     "macOS": {
       "infoPlist": "Info.plist",
-      "signingIdentity": "ad-hoc"
+      "signingIdentity": "-"
     },
     "windows": {
       "nsis": {
