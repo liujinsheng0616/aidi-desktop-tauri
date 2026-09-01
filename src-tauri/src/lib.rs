@@ -3581,6 +3581,13 @@ pub fn run() {
         let _ = dotenv::dotenv();
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // 第二个实例启动时，把已有主窗口显示并聚焦
+            if let Some(window) = app.webview_windows().get("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_deep_link::init())
