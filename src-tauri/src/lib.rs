@@ -394,37 +394,37 @@ mod space_screenshot {
     /// 排查「没反应」时能直接从日志判断是触发没到，还是到了却被权限挡住。
     pub fn do_screenshot_and_emit(app: &AppHandle, source: &str) {
         eprintln!("[screenshot] 触发源: {source}");
-        // 打包后 CGPreflightScreenCaptureAccess() 对未签名 .app 返回值不可靠：
-        // 用户已在系统设置里授权，但预检仍返回 false，导致永远走不进截图分支。
-        // 改为：不再提前拦截，直接尝试截图。若未授权，xcap 返回壁纸图而非报错，
-        // 用户看到截到的是壁纸而非实际画面，会自行去系统设置检查权限。
-        // 同时仍通过权限预检做引导：首次弹系统框，之后打开设置面板（但不再 return 拦截）。
-        if !has_screen_permission() {
-            if !PERMISSION_REQUESTED.swap(true, Ordering::SeqCst) {
-                eprintln!("[screenshot] 可能缺少「屏幕录制」权限，已弹出系统授权确认框");
-                request_screen_permission();
-            } else if !SETTINGS_OPENED.swap(true, Ordering::SeqCst) {
-                eprintln!("[screenshot] 仍未授权，已打开系统设置面板（后续不再重复打开）");
-                open_screen_permission_settings();
-            }
-            if let Some(main_window) = app.webview_windows().get("main") {
-                let _ = main_window.show();
-                let _ = main_window.emit(
-                    "screenshot-permission-needed",
-                    // 输入框展开态仅 303 宽，文案必须短，否则会被省略号截断。
-                    // 完整说明放在前端的 title 悬浮提示里。
-                    serde_json::json!({
-                        "message": "缺少屏幕录制权限"
-                    }),
-                );
-            }
-            // 不再 return，继续尝试截图
-        }
 
+        // 打包后未签名 .app 的 CGPreflightScreenCaptureAccess() 不可靠：
+        // 用户已授权但预检仍返回 false。因此不再预检拦截，直接尝试截图。
+        // 截图后通过检测像素方差判断是否截到了真实画面（未授权时 xcap 返回黑屏/壁纸）。
         match capture_main_screen() {
             Ok(data_url) => {
-                // 缓存供 ChatView 发送时拉取（图走后端 static，避免 base64 反复过 IPC）
-                // 与前端 QuickInputBox 的 9 张上限保持一致，后端也限制，避免前端不显示但后端多缓存
+                // 判断截图是否有效：未授权时 xcap 返回纯黑或壁纸图，
+                // 通过检测像素方差来区分。方差极小说明是黑屏，需要引导授权。
+                let is_likely_blank = is_blank_screenshot(&data_url);
+
+                if is_likely_blank {
+                    eprintln!("[screenshot] 截图疑似黑屏/壁纸，可能缺少屏幕录制权限");
+                    // 首次弹系统授权框，之后引导到设置面板
+                    if !PERMISSION_REQUESTED.swap(true, Ordering::SeqCst) {
+                        request_screen_permission();
+                    } else if !SETTINGS_OPENED.swap(true, Ordering::SeqCst) {
+                        open_screen_permission_settings();
+                    }
+                    if let Some(main_window) = app.webview_windows().get("main") {
+                        let _ = main_window.show();
+                        let _ = main_window.emit(
+                            "screenshot-permission-needed",
+                            serde_json::json!({
+                                "message": "缺少屏幕录制权限，点击授权"
+                            }),
+                        );
+                    }
+                    return;
+                }
+
+                // 有效截图：缓存并推送预览
                 if let Ok(mut slot) = LATEST_SCREENSHOT.lock() {
                     if slot.len() < 9 {
                         slot.push(data_url.clone());
@@ -432,7 +432,6 @@ mod space_screenshot {
                 }
                 let app_clone = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    // 确保浮动球可见（Cmd+E 可能在任意应用下触发）
                     if let Some(main_window) = app_clone.webview_windows().get("main") {
                         let _ = main_window.show();
                         let _ = main_window.set_focus();
@@ -445,6 +444,58 @@ mod space_screenshot {
             }
             Err(e) => eprintln!("[screenshot] 截图失败: {e}"),
         }
+    }
+
+    /// 检测截图是否为黑屏/壁纸：对 base64 PNG 解码后采样像素计算方差。
+    /// 未授权时 macOS 截图返回纯黑或只有壁纸的图像，方差极低。
+    fn is_blank_screenshot(data_url: &str) -> bool {
+        // 去掉 "data:image/png;base64," 前缀
+        let b64 = match data_url.strip_prefix("data:image/png;base64,") {
+            Some(s) => s,
+            None => return false,
+        };
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let bytes = match STANDARD.decode(b64) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        // 从 PNG 字节解码为图像
+        let img = match image::load_from_memory(&bytes) {
+            Ok(i) => i.to_rgba8(),
+            Err(_) => return false,
+        };
+        let raw = img.as_raw();
+        if raw.is_empty() {
+            return true;
+        }
+        // 采样：每隔一定步长取一个像素的亮度，计算方差
+        // 步长 = 4 bytes/像素 × 100 = 每隔 100 像素采样一次
+        let step = 400; // 100 像素 × 4 bytes
+        let mut samples: Vec<u32> = Vec::new();
+        let mut i = 0;
+        while i + 2 < raw.len() {
+            let r = raw[i] as u32;
+            let g = raw[i + 1] as u32;
+            let b = raw[i + 2] as u32;
+            let luminance = (r + g + b) / 3;
+            samples.push(luminance);
+            i += step;
+        }
+        if samples.is_empty() {
+            return true;
+        }
+        let mean = samples.iter().sum::<u32>() / samples.len() as u32;
+        let variance: u32 = samples.iter()
+            .map(|v| {
+                let diff = if *v > mean { *v - mean } else { mean - *v };
+                diff * diff
+            })
+            .sum::<u32>() / samples.len() as u32;
+        // 纯黑屏方差为 0，壁纸方差也很低。
+        // 真实截图有各种颜色和内容，方差远高于阈值。
+        // 阈值设为 100，足够区分黑屏/壁纸和真实画面。
+        eprintln!("[screenshot] 像素方差: {variance} (samples={})", samples.len());
+        variance < 100
     }
 
 }
