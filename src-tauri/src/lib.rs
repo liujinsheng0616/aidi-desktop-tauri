@@ -1673,7 +1673,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 
     let builder = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
-        .inner_size(192.0, 152.0)
+        .inner_size(192.0, 196.0)
         .decorations(false)
         .transparent(menu_transparent)
         .always_on_top(true)
@@ -1783,7 +1783,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
                                             width: 192.0,
-                                            height: 152.0,
+                                            height: 196.0,
                                         }));
                                     }
                                 }
@@ -2566,7 +2566,7 @@ fn show_menu(app: tauri::AppHandle) {
 
     // 菜单尺寸常量
     let menu_width: i32 = 192;
-    let menu_height: i32 = 152;
+    let menu_height: i32 = 196;
     let menu_gap: i32 = 0;
 
     // 获取球的逻辑位置
@@ -2722,7 +2722,7 @@ fn hide_menu(app: tauri::AppHandle) {
         // 重置窗口大小为主菜单尺寸，避免下次显示时出现抖动
         let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 152.0,
+            height: 196.0,
         }));
         let _ = menu_window.hide();
     }
@@ -2777,7 +2777,7 @@ fn menu_collapse(app: tauri::AppHandle) {
         }
         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 152.0,
+            height: 196.0,
         }));
     }
 }
