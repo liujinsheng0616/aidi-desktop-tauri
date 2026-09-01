@@ -45,8 +45,13 @@ const ballSize = computed(() => props.size || 60)
 function showPermissionNotice(message: string) {
   permissionNotice.value = message
   if (noticeTimer) clearTimeout(noticeTimer)
-  // 提示常驻不自动消失：用户需要看到提示 → 点击授权 → 去系统设置开启权限
-  // 只有用户点击提示行打开设置后才收起
+  // 8s 而非 5s：提示行是可点击的授权入口，得留出看见 + 点击的时间；
+  // 但它占着输入框位置，不能常驻，所以仍然自动恢复。
+  noticeTimer = setTimeout(() => {
+    permissionNotice.value = null
+    noticeTimer = null
+    nextTick(() => inputRef.value?.focus())
+  }, 8000)
 }
 
 /** 点击提示行 → 打开系统「屏幕录制」设置面板 */
