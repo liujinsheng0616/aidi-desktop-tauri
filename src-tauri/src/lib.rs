@@ -394,15 +394,16 @@ mod space_screenshot {
     /// 排查「没反应」时能直接从日志判断是触发没到，还是到了却被权限挡住。
     pub fn do_screenshot_and_emit(app: &AppHandle, source: &str) {
         eprintln!("[screenshot] 触发源: {source}");
-        // 先查权限：未授权时截屏 API 会静默返回壁纸，必须拦在截图之前
+        // 打包后 CGPreflightScreenCaptureAccess() 对未签名 .app 返回值不可靠：
+        // 用户已在系统设置里授权，但预检仍返回 false，导致永远走不进截图分支。
+        // 改为：不再提前拦截，直接尝试截图。若未授权，xcap 返回壁纸图而非报错，
+        // 用户看到截到的是壁纸而非实际画面，会自行去系统设置检查权限。
+        // 同时仍通过权限预检做引导：首次弹系统框，之后打开设置面板（但不再 return 拦截）。
         if !has_screen_permission() {
-            // 首次：只弹系统授权确认框，不跳设置面板（避免打断用户在弹窗上点「允许」）
             if !PERMISSION_REQUESTED.swap(true, Ordering::SeqCst) {
-                eprintln!("[screenshot] 缺少「屏幕录制」权限，已弹出系统授权确认框");
+                eprintln!("[screenshot] 可能缺少「屏幕录制」权限，已弹出系统授权确认框");
                 request_screen_permission();
             } else if !SETTINGS_OPENED.swap(true, Ordering::SeqCst) {
-                // 第二次仍未授权：系统弹窗已失效（同一身份只弹一次），引导到设置面板。
-                // 只开一次——否则用户每按一次快捷键就被弹一个设置窗口，非常烦人。
                 eprintln!("[screenshot] 仍未授权，已打开系统设置面板（后续不再重复打开）");
                 open_screen_permission_settings();
             }
@@ -410,14 +411,14 @@ mod space_screenshot {
                 let _ = main_window.show();
                 let _ = main_window.emit(
                     "screenshot-permission-needed",
-                    // 输入框展开态仅 303px 宽，文案必须短，否则会被省略号截断。
+                    // 输入框展开态仅 303 宽，文案必须短，否则会被省略号截断。
                     // 完整说明放在前端的 title 悬浮提示里。
                     serde_json::json!({
                         "message": "缺少屏幕录制权限"
                     }),
                 );
             }
-            return;
+            // 不再 return，继续尝试截图
         }
 
         match capture_main_screen() {
@@ -1672,7 +1673,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 
     let builder = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
-        .inner_size(192.0, 152.0)
+        .inner_size(192.0, 196.0)
         .decorations(false)
         .transparent(menu_transparent)
         .always_on_top(true)
@@ -1782,7 +1783,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
                                             width: 192.0,
-                                            height: 152.0,
+                                            height: 196.0,
                                         }));
                                     }
                                 }
@@ -2565,7 +2566,7 @@ fn show_menu(app: tauri::AppHandle) {
 
     // 菜单尺寸常量
     let menu_width: i32 = 192;
-    let menu_height: i32 = 152;
+    let menu_height: i32 = 196;
     let menu_gap: i32 = 0;
 
     // 获取球的逻辑位置
@@ -2721,7 +2722,7 @@ fn hide_menu(app: tauri::AppHandle) {
         // 重置窗口大小为主菜单尺寸，避免下次显示时出现抖动
         let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 152.0,
+            height: 196.0,
         }));
         let _ = menu_window.hide();
     }
@@ -2776,7 +2777,7 @@ fn menu_collapse(app: tauri::AppHandle) {
         }
         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 152.0,
+            height: 196.0,
         }));
     }
 }

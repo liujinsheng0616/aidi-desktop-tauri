@@ -2,5 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>AIDI Desktop 需要屏幕录制权限来截取屏幕画面，用于 AI 辅助问答。</string>
 </dict>
 </plist>
