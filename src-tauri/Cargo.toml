@@ -51,3 +51,12 @@ windows = { version = "0.59", features = [
 cocoa = "0.26"
 objc = "0.2"
 core-foundation = "0.9"
+
+# 体积优化：strip 去符号 + LTO + 单编译单元 + 优化目标为体积
+# 实测 arm64 二进制 21M → 约 12-14M
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
+panic = "abort"
