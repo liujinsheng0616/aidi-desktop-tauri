@@ -1083,6 +1083,19 @@ fn animate_to_position(
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
+    // show 之前确保窗口尺寸正确，避免 Windows 上 hide 状态下 set_size 不生效导致内容被截断
+    if let Some(w) = app.get_webview_window("main") {
+        let ball_size_val = *BALL_SIZE.lock().unwrap();
+        let divider_width = 1u32;
+        let search_width = 36u32;
+        let border = 1u32;
+        let window_width = ball_size_val + divider_width + search_width + border * 2;
+        let window_height = ball_size_val + BALL_PADDING * 2;
+        let _ = w.set_size(Size::Logical(tauri::LogicalSize {
+            width: window_width as f64,
+            height: window_height as f64,
+        }));
+    }
     let _ = window.show();
     BALL_VISIBLE.store(true, Ordering::SeqCst);
     sync_toggle_menu_item(&app, true);
@@ -3843,10 +3856,17 @@ pub fn run() {
                                 // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
                                 // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
                                 if let Some(w) = app_handle_timeout.webview_windows().get("main") {
+                                    // show 之前确保窗口尺寸正确，避免内容被截断
+                                    let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                    let window_width = ball_size_val + 1 + 36 + 2;
+                                    let window_height = ball_size_val + BALL_PADDING * 2;
+                                    let _ = w.set_size(Size::Logical(tauri::LogicalSize {
+                                        width: window_width as f64,
+                                        height: window_height as f64,
+                                    }));
                                     let _ = w.show();
                                     BALL_VISIBLE.store(true, Ordering::SeqCst);
                                     sync_toggle_menu_item(&app_handle_timeout, true);
-                                    let ball_size_val = *BALL_SIZE.lock().unwrap();
                                     let full_size = ball_size_val + BALL_PADDING * 2;
                                     apply_circular_window_mask(&w, full_size, "timeout_fallback");
                                 }
