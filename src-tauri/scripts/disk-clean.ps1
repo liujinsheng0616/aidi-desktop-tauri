@@ -31,7 +31,8 @@ function Remove-ItemSafely($path, $isFolder) {
     try {
         if ($isFolder) { Remove-Item -Path $path -Recurse -Force -ErrorAction Stop }
         else { Remove-Item -Path $path -Force -ErrorAction Stop }
-        return $true
+        # 验证是否真的删除了，不依赖 Remove-Item 是否抛异常
+        return -not (Test-Path $path)
     } catch {
         try {
             if ($isFolder) { cmd /c "rd /s /q `"$path`" 2>nul" | Out-Null }

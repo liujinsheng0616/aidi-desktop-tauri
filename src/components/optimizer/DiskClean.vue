@@ -168,7 +168,20 @@ async function handleClean() {
     // Refresh disk data after cleaning completes
     await refreshDisk()
   } catch (e) {
-    // 清理失败，忽略
+    // 清理失败，显示错误信息
+    cleanResult.value = {
+      cleaned: 0,
+      cleanedMB: 0,
+      successCount: 0,
+      failedCount: 1,
+      details: [{
+        category: 'error',
+        path: String(e),
+        size: 0,
+        status: 'failed' as const,
+        reason: '脚本执行失败'
+      }]
+    }
   } finally {
     isCleaning.value = false
     isOperating.value = false

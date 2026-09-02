@@ -1083,6 +1083,19 @@ fn animate_to_position(
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
+    // show 之前确保窗口尺寸正确，避免 Windows 上 hide 状态下 set_size 不生效导致内容被截断
+    if let Some(w) = app.get_webview_window("main") {
+        let ball_size_val = *BALL_SIZE.lock().unwrap();
+        let divider_width = 1u32;
+        let search_width = 36u32;
+        let border = 1u32;
+        let window_width = ball_size_val + divider_width + search_width + border * 2;
+        let window_height = ball_size_val + BALL_PADDING * 2;
+        let _ = w.set_size(Size::Logical(tauri::LogicalSize {
+            width: window_width as f64,
+            height: window_height as f64,
+        }));
+    }
     let _ = window.show();
     BALL_VISIBLE.store(true, Ordering::SeqCst);
     sync_toggle_menu_item(&app, true);
@@ -2378,22 +2391,22 @@ async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_s
 /// 在系统默认浏览器中打开外部链接
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "windows")]
-    let cmd = "cmd";
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(cmd)
-            .args(["/c", "start", "", &url])
+        // 不使用 cmd /c start，因为 cmd 会把 URL 中的 & 当作命令分隔符，
+        // 导致含多个 query 参数的链接被拆成多条命令（打开多个窗口）。
+        // explorer.exe 不解析 &，直接用默认浏览器打开 URL。
+        std::process::Command::new("explorer.exe")
+            .arg(&url)
             .spawn()
             .map_err(|e| format!("打开链接失败: {}", e))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
+        #[cfg(target_os = "macos")]
+        let cmd = "open";
+        #[cfg(target_os = "linux")]
+        let cmd = "xdg-open";
         std::process::Command::new(cmd)
             .arg(&url)
             .spawn()
@@ -3057,10 +3070,27 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
         if let (Some(pos), Some(old)) = (current_pos, old_size) {
             // 计算新的窗口位置，保持视觉中心不变
             let new_x = pos.x - ((old.width as u32 - window_width) / 2) as i32;
-            let new_y = pos.y - ((old.height as u32 - window_height) / 2) as i32;
+            let mut new_y = pos.y - ((old.height as u32 - window_height) / 2) as i32;
+
+            // 夹紧到屏幕边界，防止窗口超出屏幕（尤其是右边截断问题）
+            let mut clamped_x = new_x;
+            if let Some(monitor) = main_window.current_monitor().ok().flatten() {
+                let screen = monitor.size();
+                let scale = monitor.scale_factor();
+                let screen_w = screen.width as i32;
+                let screen_h = screen.height as i32;
+                // 窗口不能超出右边
+                let max_x = screen_w - (window_width as f64 * scale) as i32;
+                if clamped_x > max_x { clamped_x = max_x; }
+                if clamped_x < 0 { clamped_x = 0; }
+                // 窗口不能超出下边
+                let max_y = screen_h - (window_height as f64 * scale) as i32;
+                if new_y > max_y { new_y = max_y; }
+                if new_y < 0 { new_y = 0; }
+            }
 
             // 先设置位置，再设置尺寸
-            let _ = main_window.set_position(Position::Physical(PhysicalPosition { x: new_x, y: new_y }));
+            let _ = main_window.set_position(Position::Physical(PhysicalPosition { x: clamped_x, y: new_y }));
         }
 
         // 使用 LogicalSize 以正确支持高 DPI 屏幕
@@ -3581,6 +3611,13 @@ pub fn run() {
         let _ = dotenv::dotenv();
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // 第二个实例启动时，把已有主窗口显示并聚焦
+            if let Some(window) = app.webview_windows().get("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -3804,6 +3841,38 @@ pub fn run() {
                     // App.vue 内部根据 token 再决定显示浮动球或登录窗口
                     let _ = window.show();
                     let _ = window.hide();
+
+                    // 超时兜底：Windows 打包后 WebView2 初始化较慢，
+                    // onMounted 里的异步 invoke 链路可能卡住导致 show_main_window
+                    // 迟迟不被调用，窗口一直隐藏看起来像闪退。
+                    // 1.5 秒后如果窗口仍隐藏且已登录，后端主动 show。
+                    // 未登录时不干预（前端应走 show_login_window 分支）
+                    #[cfg(target_os = "windows")]
+                    {
+                        let app_handle_timeout = app.handle().clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(1500));
+                            if !BALL_VISIBLE.load(Ordering::SeqCst) && IS_LOGGED_IN.load(Ordering::SeqCst) {
+                                // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
+                                // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
+                                if let Some(w) = app_handle_timeout.webview_windows().get("main") {
+                                    // show 之前确保窗口尺寸正确，避免内容被截断
+                                    let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                    let window_width = ball_size_val + 1 + 36 + 2;
+                                    let window_height = ball_size_val + BALL_PADDING * 2;
+                                    let _ = w.set_size(Size::Logical(tauri::LogicalSize {
+                                        width: window_width as f64,
+                                        height: window_height as f64,
+                                    }));
+                                    let _ = w.show();
+                                    BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                    sync_toggle_menu_item(&app_handle_timeout, true);
+                                    let full_size = ball_size_val + BALL_PADDING * 2;
+                                    apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                                }
+                            }
+                        });
+                    }
 
                     // Windows 专用：监听窗口失去焦点事件，自动刷新圆形遮罩
                     // 解决：点击其他应用后悬浮球出现灰色背景的问题
