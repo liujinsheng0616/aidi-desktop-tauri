@@ -3821,22 +3821,25 @@ pub fn run() {
                     // 迟迟不被调用，窗口一直隐藏看起来像闪退。
                     // 1.5 秒后如果窗口仍隐藏且已登录，后端主动 show。
                     // 未登录时不干预（前端应走 show_login_window 分支）
-                    let app_handle_timeout = app.handle().clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(1500));
-                        if !BALL_VISIBLE.load(Ordering::SeqCst) && IS_LOGGED_IN.load(Ordering::SeqCst) {
-                            // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
-                            // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
-                            if let Some(w) = app_handle_timeout.webview_windows().get("main") {
-                                let _ = w.show();
-                                BALL_VISIBLE.store(true, Ordering::SeqCst);
-                                sync_toggle_menu_item(&app_handle_timeout, true);
-                                let ball_size_val = *BALL_SIZE.lock().unwrap();
-                                let full_size = ball_size_val + BALL_PADDING * 2;
-                                apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                    #[cfg(target_os = "windows")]
+                    {
+                        let app_handle_timeout = app.handle().clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(1500));
+                            if !BALL_VISIBLE.load(Ordering::SeqCst) && IS_LOGGED_IN.load(Ordering::SeqCst) {
+                                // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
+                                // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
+                                if let Some(w) = app_handle_timeout.webview_windows().get("main") {
+                                    let _ = w.show();
+                                    BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                    sync_toggle_menu_item(&app_handle_timeout, true);
+                                    let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                    let full_size = ball_size_val + BALL_PADDING * 2;
+                                    apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
 
                     // Windows 专用：监听窗口失去焦点事件，自动刷新圆形遮罩
                     // 解决：点击其他应用后悬浮球出现灰色背景的问题

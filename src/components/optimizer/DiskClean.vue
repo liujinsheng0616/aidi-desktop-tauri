@@ -163,7 +163,22 @@ async function handleClean() {
 
   try {
     const result = await cleanDisk(selectedKeys as any)
-    cleanResult.value = result as any
+    // 后处理：脚本对 partial 目录同时生成 partial + failed 两条记录，
+    // 实际已清理的部分不应算作失败，过滤掉这些配对的 failed 记录
+    const raw = result as any
+    if (raw?.details) {
+      // 找出所有 partial 记录的 path，对应的 failed 记录是残留部分
+      const partialPaths = new Set(
+        raw.details.filter((d: CleanDetail) => d.status === 'partial').map((d: CleanDetail) => d.path)
+      )
+      // 过滤掉与 partial 同 path 的 failed 记录
+      raw.details = raw.details.filter((d: CleanDetail) =>
+        !(d.status === 'failed' && partialPaths.has(d.path))
+      )
+      // 重新计算 failedCount
+      raw.failedCount = raw.details.filter((d: CleanDetail) => d.status === 'failed').length
+    }
+    cleanResult.value = raw
 
     // Refresh disk data after cleaning completes
     await refreshDisk()
@@ -261,7 +276,7 @@ async function handleClean() {
           v-for="(detail, idx) in visibleDetails"
           :key="idx"
           class="detail-item flex items-center justify-between p-1.5 border-b last:border-b-0"
-          :class="detail.status === 'failed' ? 'bg-red-50 dark:bg-red-900/10' : ''"
+          :class="detail.status === 'failed' ? 'bg-red-50 dark:bg-red-900/10' : detail.status === 'partial' ? 'bg-yellow-50 dark:bg-yellow-900/10' : ''"
         >
           <div class="flex-1 min-w-0">
             <div class="truncate text-muted-foreground" :title="detail.path">
@@ -273,7 +288,7 @@ async function handleClean() {
           </div>
           <div class="flex items-center gap-2 ml-2 shrink-0">
             <span class="text-muted-foreground">{{ formatSize(detail.size) }}</span>
-            <span v-if="detail.status === 'success'" class="text-green-500">OK</span>
+            <span v-if="detail.status === 'success' || detail.status === 'partial'" class="text-green-500">OK</span>
             <span v-else class="text-red-500">失败</span>
           </div>
         </div>
