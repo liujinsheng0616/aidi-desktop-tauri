@@ -3603,10 +3603,6 @@ pub fn run() {
             if let Some(window) = app.webview_windows().get("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
-                // 重新应用圆形遮罩，避免 show 后形状不对（大半圆问题）
-                let ball_size_val = *BALL_SIZE.lock().unwrap();
-                let full_size = ball_size_val + BALL_PADDING * 2;
-                apply_circular_window_mask(&window, full_size, "single_instance");
             }
         }))
         .plugin(tauri_plugin_shell::init())
