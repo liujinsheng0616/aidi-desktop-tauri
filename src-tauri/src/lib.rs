@@ -2378,22 +2378,22 @@ async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_s
 /// 在系统默认浏览器中打开外部链接
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "windows")]
-    let cmd = "cmd";
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(cmd)
-            .args(["/c", "start", "", &url])
+        // 不使用 cmd /c start，因为 cmd 会把 URL 中的 & 当作命令分隔符，
+        // 导致含多个 query 参数的链接被拆成多条命令（打开多个窗口）。
+        // explorer.exe 不解析 &，直接用默认浏览器打开 URL。
+        std::process::Command::new("explorer.exe")
+            .arg(&url)
             .spawn()
             .map_err(|e| format!("打开链接失败: {}", e))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
+        #[cfg(target_os = "macos")]
+        let cmd = "open";
+        #[cfg(target_os = "linux")]
+        let cmd = "xdg-open";
         std::process::Command::new(cmd)
             .arg(&url)
             .spawn()
