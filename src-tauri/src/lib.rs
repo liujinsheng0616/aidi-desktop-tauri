@@ -3057,10 +3057,27 @@ fn update_window_size(app: tauri::AppHandle, size: u32) {
         if let (Some(pos), Some(old)) = (current_pos, old_size) {
             // 计算新的窗口位置，保持视觉中心不变
             let new_x = pos.x - ((old.width as u32 - window_width) / 2) as i32;
-            let new_y = pos.y - ((old.height as u32 - window_height) / 2) as i32;
+            let mut new_y = pos.y - ((old.height as u32 - window_height) / 2) as i32;
+
+            // 夹紧到屏幕边界，防止窗口超出屏幕（尤其是右边截断问题）
+            let mut clamped_x = new_x;
+            if let Some(monitor) = main_window.current_monitor().ok().flatten() {
+                let screen = monitor.size();
+                let scale = monitor.scale_factor();
+                let screen_w = screen.width as i32;
+                let screen_h = screen.height as i32;
+                // 窗口不能超出右边
+                let max_x = screen_w - (window_width as f64 * scale) as i32;
+                if clamped_x > max_x { clamped_x = max_x; }
+                if clamped_x < 0 { clamped_x = 0; }
+                // 窗口不能超出下边
+                let max_y = screen_h - (window_height as f64 * scale) as i32;
+                if new_y > max_y { new_y = max_y; }
+                if new_y < 0 { new_y = 0; }
+            }
 
             // 先设置位置，再设置尺寸
-            let _ = main_window.set_position(Position::Physical(PhysicalPosition { x: new_x, y: new_y }));
+            let _ = main_window.set_position(Position::Physical(PhysicalPosition { x: clamped_x, y: new_y }));
         }
 
         // 使用 LogicalSize 以正确支持高 DPI 屏幕
