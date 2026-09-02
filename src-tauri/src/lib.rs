@@ -3586,6 +3586,10 @@ pub fn run() {
             if let Some(window) = app.webview_windows().get("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
+                // 重新应用圆形遮罩，避免 show 后形状不对（大半圆问题）
+                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                let full_size = ball_size_val + BALL_PADDING * 2;
+                apply_circular_window_mask(&window, full_size, "single_instance");
             }
         }))
         .plugin(tauri_plugin_shell::init())
@@ -3815,13 +3819,14 @@ pub fn run() {
                     // 超时兜底：Windows 打包后 WebView2 初始化较慢，
                     // onMounted 里的异步 invoke 链路可能卡住导致 show_main_window
                     // 迟迟不被调用，窗口一直隐藏看起来像闪退。
-                    // 3 秒后如果窗口仍隐藏，后端主动 show。
+                    // 1.5 秒后如果窗口仍隐藏且已登录，后端主动 show。
+                    // 未登录时不干预（前端应走 show_login_window 分支）
                     let app_handle_timeout = app.handle().clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_secs(3));
-                        if !BALL_VISIBLE.load(Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        if !BALL_VISIBLE.load(Ordering::SeqCst) && IS_LOGGED_IN.load(Ordering::SeqCst) {
                             // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
-                            // 若仍为 false，说明前端异步链路未完成，主动显示
+                            // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
                             if let Some(w) = app_handle_timeout.webview_windows().get("main") {
                                 let _ = w.show();
                                 BALL_VISIBLE.store(true, Ordering::SeqCst);
