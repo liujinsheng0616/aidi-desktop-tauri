@@ -216,6 +216,46 @@ fn calculate_dir_size(path: &Path) -> (u64, u64) {
     (total_size, file_count)
 }
 
+/// macOS 上用 du 命令获取废纸篓大小和文件数
+/// ~/.Trash 受隐私保护，fs::read_dir 可能被拒绝，du 有系统级权限
+#[cfg(target_os = "macos")]
+fn get_trash_size_macos(path: &Path) -> (u64, u64) {
+    // 先尝试 fs::read_dir（有权限时直接用）
+    let (size, count) = calculate_dir_size(path);
+    if size > 0 || count > 0 {
+        return (size, count);
+    }
+
+    // fs 读取失败（权限拒绝），改用 du 命令
+    let path_str = path.to_string_lossy().to_string();
+    let output = std::process::Command::new("du")
+        .args(["-sk", &path_str])
+        .output();
+
+    if let Ok(out) = output {
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        // du -sk 输出格式: "12345\t/Users/xxx/.Trash"
+        if let Some(size_str) = stdout.split('\t').next() {
+            if let Ok(kb) = size_str.trim().parse::<u64>() {
+                let bytes = kb * 1024;
+                // 用 ls 统计文件数
+                let ls_output = std::process::Command::new("ls")
+                    .args(["-1", &path_str])
+                    .output();
+                let file_count = if let Ok(ls_out) = ls_output {
+                    let ls_stdout = String::from_utf8_lossy(&ls_out.stdout).to_string();
+                    ls_stdout.lines().count() as u64
+                } else {
+                    0
+                };
+                return (bytes, file_count);
+            }
+        }
+    }
+
+    (0, 0)
+}
+
 #[cfg(windows)]
 fn get_disk_health_info() -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
     use std::process::Command;
@@ -525,6 +565,11 @@ pub fn optimizer_disk_scan(_app: tauri::AppHandle) -> Result<ScanItem, String> {
 
     if let Some(recycle_bin) = get_recycle_bin_path() {
         if recycle_bin.exists() {
+            // macOS 上 ~/.Trash 受隐私保护，fs::read_dir 可能被拒绝（返回 0）
+            // 改用 du 命令获取大小，du 有系统级权限能正确读取
+            #[cfg(target_os = "macos")]
+            let (size, count) = get_trash_size_macos(&recycle_bin);
+            #[cfg(not(target_os = "macos"))]
             let (size, count) = calculate_dir_size(&recycle_bin);
             total_size += size;
             if let Some(cat_data) = categories.get_mut("recycleBin") {
