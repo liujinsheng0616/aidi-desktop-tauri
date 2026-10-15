@@ -501,11 +501,16 @@ fn open_screenshot_preview(data_url: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("打开预览失败: {e}"))?;
     #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("打开预览失败: {e}"))?;
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(&path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("打开预览失败: {e}"))?;
+    }
     Ok(())
 }
 
@@ -1685,7 +1690,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 
     let builder = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
-        .inner_size(192.0, 196.0)
+        .inner_size(192.0, 224.0)
         .decorations(false)
         .transparent(menu_transparent)
         .always_on_top(true)
@@ -1795,7 +1800,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
                                             width: 192.0,
-                                            height: 196.0,
+                                            height: 224.0,
                                         }));
                                     }
                                 }
@@ -2393,11 +2398,16 @@ async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_s
 fn open_external_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // 不使用 cmd /c start，因为 cmd 会把 URL 中的 & 当作命令分隔符，
-        // 导致含多个 query 参数的链接被拆成多条命令（打开多个窗口）。
-        // explorer.exe 不解析 &，直接用默认浏览器打开 URL。
-        std::process::Command::new("explorer.exe")
-            .arg(&url)
+        // 使用 cmd /c start "" "URL" 打开链接：
+        // - start 是 cmd 内置命令，调用系统默认浏览器
+        // - 第一个 "" 是窗口标题占位（否则 start 会把 URL 当标题）
+        // - URL 用引号包裹，& 不会被当作命令分隔符
+        // - CREATE_NO_WINDOW 避免 cmd 窗口闪现
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("打开链接失败: {}", e))?;
     }
@@ -2578,7 +2588,7 @@ fn show_menu(app: tauri::AppHandle) {
 
     // 菜单尺寸常量
     let menu_width: i32 = 192;
-    let menu_height: i32 = 196;
+    let menu_height: i32 = 224;
     let menu_gap: i32 = 0;
 
     // 获取球的逻辑位置
@@ -2734,7 +2744,7 @@ fn hide_menu(app: tauri::AppHandle) {
         // 重置窗口大小为主菜单尺寸，避免下次显示时出现抖动
         let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 196.0,
+            height: 224.0,
         }));
         let _ = menu_window.hide();
     }
@@ -2789,7 +2799,7 @@ fn menu_collapse(app: tauri::AppHandle) {
         }
         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 196.0,
+            height: 224.0,
         }));
     }
 }
