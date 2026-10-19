@@ -34,12 +34,18 @@ free_gb=$(echo "scale=2; $available_mem / 1073741824" | bc)
 used_percent=$(echo "scale=1; $used_mem * 100 / $total_mem" | bc)
 available_percent=$(echo "scale=1; 100 - $used_percent" | bc)
 
-# Get top 5 memory-consuming processes
-top_processes=$(ps aux --sort=-%mem 2>/dev/null | head -6 | tail -5 | awk '{
-    mem_kb = $6;
-    mem_mb = mem_kb / 1024;
-    printf "{ \"name\": \"%s\", \"pid\": %s, \"memory\": %d, \"memoryMB\": %.1f }", $11, $2, mem_kb * 1024, mem_mb
-}' | paste -sd ',' -)
+# Get top 5 memory-consuming processes (use python3 for proper JSON escaping)
+top_processes=$(ps -arcwwwxo "pid,rss,comm" 2>/dev/null | head -6 | tail -5 | python3 -c "
+import sys, json
+procs = []
+for line in sys.stdin:
+    parts = line.strip().split(None, 2)
+    if len(parts) == 3:
+        pid, rss, name = parts
+        mem_kb = int(rss)
+        procs.append({'name': name, 'pid': int(pid), 'memory': mem_kb * 1024, 'memoryMB': round(mem_kb / 1024, 1)})
+print(json.dumps(procs, ensure_ascii=False, separators=(',', ': ')))
+" 2>/dev/null)
 
 # Fallback for macOS ps format
 if [ -z "$top_processes" ]; then
@@ -75,7 +81,7 @@ cat << EOF
     "freeGB": $free_gb,
     "usedPercent": $used_percent,
     "availablePercent": $available_percent,
-    "topProcesses": [$top_processes]
+    "topProcesses": $top_processes
   }
 }
 EOF
