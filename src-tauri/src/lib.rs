@@ -3046,45 +3046,51 @@ async fn download_and_install_update(
 }
 
 /// 下载软件安装包并调起安装（供前端白名单软件一键安装）
+/// 仅支持 Windows；macOS 返回错误提示
 #[tauri::command]
 async fn download_and_install_software(
     _app: tauri::AppHandle,
     download_url: String,
-) -> Result<(), String> {
-    let tmp_dir = std::env::temp_dir();
-    // 从 URL 中提取文件名， fallback 用时间戳
-    let file_name = download_url
-        .rsplit('/')
-        .next()
-        .unwrap_or("software_installer")
-        .to_string();
-    let save_path = tmp_dir.join(format!("aidi-software-{}", file_name));
-
-    let resp = reqwest::get(&download_url)
-        .await
-        .map_err(|e| format!("下载失败: {}", e))?;
-    let bytes = resp.bytes()
-        .await
-        .map_err(|e| format!("读取下载内容失败: {}", e))?;
-    std::fs::write(&save_path, &bytes)
-        .map_err(|e| format!("写入文件失败: {}", e))?;
-
+) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg(&save_path)
-            .spawn()
-            .map_err(|e| format!("打开安装包失败: {}", e))?;
+        let _ = &download_url;
+        return Err("macOS 不支持安装 Windows 软件，请在 Windows 电脑上使用此功能".to_string());
     }
 
     #[cfg(target_os = "windows")]
     {
+        let tmp_dir = std::env::temp_dir();
+        // 从 URL 中提取文件名，fallback 用时间戳
+        let file_name = download_url
+            .rsplit('/')
+            .next()
+            .unwrap_or("software_installer")
+            .to_string();
+        let save_path = tmp_dir.join(format!("aidi-software-{}", file_name));
+
+        let resp = reqwest::get(&download_url)
+            .await
+            .map_err(|e| format!("下载失败: {}", e))?;
+        let bytes = resp.bytes()
+            .await
+            .map_err(|e| format!("读取下载内容失败: {}", e))?;
+        std::fs::write(&save_path, &bytes)
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+
         std::process::Command::new(&save_path)
             .spawn()
             .map_err(|e| format!("打开安装包失败: {}", e))?;
+
+        // 返回下载路径供前端展示给用户
+        Ok(save_path.to_string_lossy().to_string())
     }
 
-    Ok(())
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = &download_url;
+        Err("当前操作系统不支持软件安装功能".to_string())
+    }
 }
 
 /// 设置上报用户信息（供前端调用）
