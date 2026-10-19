@@ -78,7 +78,7 @@ if ($batteryInfo.Count -eq 0) {
 
         if ($batInfo -and $batStatus) {
             $designCap = $batInfo.DesignedCapacity
-            $fullCap = $batStatus.Charging ? $batInfo.FullChargedCapacity : $batInfo.FullChargedCapacity
+            $fullCap = $batInfo.FullChargedCapacity
             $healthPercent = if ($designCap -gt 0) { [math]::Round(($fullCap / $designCap) * 100, 1) } else { 0 }
 
             $batteryInfo += @{
