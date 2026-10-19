@@ -2973,12 +2973,30 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
 #[tauri::command]
 async fn check_update() -> Result<UpdateInfo, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
-    let resp = reqwest::get(UPDATE_MANIFEST_URL)
-        .await
-        .map_err(|e| format!("请求版本清单失败: {}", e))?;
-    let manifest: UpdateManifest = resp.json()
-        .await
-        .map_err(|e| format!("解析版本清单失败: {}", e))?;
+
+    // 网络失败时仍返回当前版本号，避免前端显示 "v..." 空白
+    let resp = match reqwest::get(UPDATE_MANIFEST_URL).await {
+        Ok(r) => r,
+        Err(_) => return Ok(UpdateInfo {
+            has_update: false,
+            current_version,
+            latest_version: String::new(),
+            release_notes: String::new(),
+            download_url: String::new(),
+            download_size: 0,
+        }),
+    };
+    let manifest: UpdateManifest = match resp.json().await {
+        Ok(m) => m,
+        Err(_) => return Ok(UpdateInfo {
+            has_update: false,
+            current_version,
+            latest_version: String::new(),
+            release_notes: String::new(),
+            download_url: String::new(),
+            download_size: 0,
+        }),
+    };
 
     let has_update = version_is_newer(&manifest.version, &current_version);
 
