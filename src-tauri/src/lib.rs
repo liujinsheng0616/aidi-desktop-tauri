@@ -3078,12 +3078,32 @@ async fn download_and_install_software(
         std::fs::write(&save_path, &bytes)
             .map_err(|e| format!("写入文件失败: {}", e))?;
 
-        std::process::Command::new(&save_path)
+        // 启动安装包并等待安装完成
+        let mut child = std::process::Command::new(&save_path)
             .spawn()
-            .map_err(|e| format!("打开安装包失败: {}", e))?;
+            .map_err(|e| {
+                // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
+                if e.raw_os_error() == Some(740) {
+                    "安装需要管理员权限，UAC 被拒绝或未弹出，请右键安装包以管理员身份运行".to_string()
+                } else {
+                    format!("打开安装包失败: {}", e)
+                }
+            })?;
 
-        // 返回下载路径供前端展示给用户
-        Ok(save_path.to_string_lossy().to_string())
+        // 等待安装程序退出（阻塞直到用户完成或取消安装）
+        let exit_status = child.wait()
+            .map_err(|e| format!("等待安装程序退出失败: {}", e))?;
+
+        let exit_code = exit_status.code().unwrap_or(-1);
+        if exit_status.success() {
+            Ok(save_path.to_string_lossy().to_string())
+        } else {
+            Err(format!(
+                "安装未完成（退出码: {}），安装包已保存到: {}",
+                exit_code,
+                save_path.to_string_lossy()
+            ))
+        }
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
