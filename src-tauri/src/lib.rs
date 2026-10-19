@@ -3508,6 +3508,41 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 }
 
 #[tauri::command]
+async fn optimizer_perf_sample(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("perf-sample"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_ssd_health(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("ssd-health"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_battery_report(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("battery-report"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_hw_errors(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("hw-errors"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_memory_gpu_diag(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("memory-gpu-diag"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
 async fn show_login_window(app: tauri::AppHandle) {
     // 先隐藏所有非 login 窗口
     let windows = app.webview_windows();
@@ -4054,6 +4089,11 @@ pub fn run() {
             optimizer_startup_list,
             optimizer_startup_toggle,
             optimizer_system_info,
+            optimizer_perf_sample,
+            optimizer_ssd_health,
+            optimizer_battery_report,
+            optimizer_hw_errors,
+            optimizer_memory_gpu_diag,
             optimizer_disk_clean,
             show_login_window,
             close_login_window,
