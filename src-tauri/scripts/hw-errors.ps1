@@ -16,7 +16,11 @@ $wheaEvents = Get-WinEvent -FilterHashtable @{
         timeCreated = $_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")
         id = $_.Id
         level = $_.LevelDisplayName
-        message = ($_.Message -replace "`r`n", " " -replace "`r", " " -replace "`n", " ").Trim().Substring(0, [math]::Min(200, ($_.Message).Length))
+        message = if ($_.Message) {
+            $msg = $_.Message -replace "`r`n", " " -replace "`r", " " -replace "`n", " "
+            $msg = $msg.Trim()
+            $msg.Substring(0, [math]::Min(200, $msg.Length))
+        } else { "" }
     }
 }
 

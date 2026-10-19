@@ -9,11 +9,11 @@ $ErrorActionPreference = "SilentlyContinue"
 $disks = Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object {
     $reliability = $_ | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
 
-    $wearPercent = if ($reliability.Wear -ge 0) { $reliability.Wear } else { 0 }
-    $powerOnHours = if ($reliability.PowerOnHours) { $reliability.PowerOnHours } else { 0 }
-    $temperature = if ($reliability.Temperature) { $reliability.Temperature } else { 0 }
-    $readErrors = if ($reliability.ReadErrorsTotal) { $reliability.ReadErrorsTotal } else { 0 }
-    $writeErrors = if ($reliability.WriteErrorsTotal) { $reliability.WriteErrorsTotal } else { 0 }
+    $wearPercent = if ($reliability -and $null -ne $reliability.Wear -and $reliability.Wear -ge 0) { $reliability.Wear } else { 0 }
+    $powerOnHours = if ($reliability -and $reliability.PowerOnHours) { $reliability.PowerOnHours } else { 0 }
+    $temperature = if ($reliability -and $reliability.Temperature) { $reliability.Temperature } else { 0 }
+    $readErrors = if ($reliability -and $reliability.ReadErrorsTotal) { $reliability.ReadErrorsTotal } else { 0 }
+    $writeErrors = if ($reliability -and $reliability.WriteErrorsTotal) { $reliability.WriteErrorsTotal } else { 0 }
 
     @{
         name = $_.FriendlyName

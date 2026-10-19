@@ -8,19 +8,19 @@ $ErrorActionPreference = "SilentlyContinue"
 
 # CPU usage
 $cpuSample = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue
-$cpuPercent = if ($cpuSample) { [math]::Round($cpuSample.CounterSamples.CookedValue, 1) } else { 0 }
+$cpuPercent = if ($cpuSample -and $cpuSample.CounterSamples) { [math]::Round($cpuSample.CounterSamples[0].CookedValue, 1) } else { 0 }
 
 # Available memory
 $memSample = Get-Counter '\Memory\Available MBytes' -ErrorAction SilentlyContinue
-$availMemMB = if ($memSample) { [math]::Round($memSample.CounterSamples.CookedValue, 0) } else { 0 }
+$availMemMB = if ($memSample -and $memSample.CounterSamples) { [math]::Round($memSample.CounterSamples[0].CookedValue, 0) } else { 0 }
 
 # Disk busy time
 $diskSample = Get-Counter '\PhysicalDisk(_Total)\% Disk Time' -ErrorAction SilentlyContinue
-$diskPercent = if ($diskSample) { [math]::Round($diskSample.CounterSamples.CookedValue, 1) } else { 0 }
+$diskPercent = if ($diskSample -and $diskSample.CounterSamples) { [math]::Round($diskSample.CounterSamples[0].CookedValue, 1) } else { 0 }
 
 # Disk queue length
 $queueSample = Get-Counter '\PhysicalDisk(_Total)\Current Disk Queue Length' -ErrorAction SilentlyContinue
-$diskQueue = if ($queueSample) { [math]::Round($queueSample.CounterSamples.CookedValue, 1) } else { 0 }
+$diskQueue = if ($queueSample -and $queueSample.CounterSamples) { [math]::Round($queueSample.CounterSamples[0].CookedValue, 1) } else { 0 }
 
 # Status determination
 if ($cpuPercent -gt 80 -or $diskQueue -gt 3) {
