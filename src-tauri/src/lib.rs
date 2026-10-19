@@ -3055,7 +3055,7 @@ async fn download_and_install_software(
     #[cfg(target_os = "macos")]
     {
         let _ = &download_url;
-        return Err("macOS 不支持安装 Windows 软件，请在 Windows 电脑上使用此功能".to_string());
+        return Err("这些软件安装包均为 Windows 版本，无法在 macOS 上运行，请在 Windows 电脑上使用此功能".to_string());
     }
 
     #[cfg(target_os = "windows")]
