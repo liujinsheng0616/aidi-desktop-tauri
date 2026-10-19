@@ -3988,30 +3988,33 @@ pub fn run() {
                     // 超时兜底：Windows 打包后 WebView2 初始化较慢，
                     // onMounted 里的异步 invoke 链路可能卡住导致 show_main_window
                     // 迟迟不被调用，窗口一直隐藏看起来像闪退。
-                    // 1.5 秒后如果窗口仍隐藏且已登录，后端主动 show。
-                    // 未登录时不干预（前端应走 show_login_window 分支）
+                    // 500ms 后如果窗口仍隐藏，后端主动 show（已登录显示球，未登录显示登录窗口）
                     #[cfg(target_os = "windows")]
                     {
                         let app_handle_timeout = app.handle().clone();
                         std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(1500));
-                            if !BALL_VISIBLE.load(Ordering::SeqCst) && IS_LOGGED_IN.load(Ordering::SeqCst) {
-                                // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
-                                // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            if !BALL_VISIBLE.load(Ordering::SeqCst) {
+                                let is_logged_in = IS_LOGGED_IN.load(Ordering::SeqCst);
                                 if let Some(w) = app_handle_timeout.webview_windows().get("main") {
-                                    // show 之前确保窗口尺寸正确，避免内容被截断
                                     let ball_size_val = *BALL_SIZE.lock().unwrap();
-                                    let window_width = ball_size_val + 1 + 36 + 2;
-                                    let window_height = ball_size_val + BALL_PADDING * 2;
-                                    let _ = w.set_size(Size::Logical(tauri::LogicalSize {
-                                        width: window_width as f64,
-                                        height: window_height as f64,
-                                    }));
-                                    let _ = w.show();
-                                    BALL_VISIBLE.store(true, Ordering::SeqCst);
-                                    sync_toggle_menu_item(&app_handle_timeout, true);
-                                    let full_size = ball_size_val + BALL_PADDING * 2;
-                                    apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                                    if is_logged_in {
+                                        // 已登录：显示悬浮球
+                                        let window_width = ball_size_val + 1 + 36 + 2;
+                                        let window_height = ball_size_val + BALL_PADDING * 2;
+                                        let _ = w.set_size(Size::Logical(tauri::LogicalSize {
+                                            width: window_width as f64,
+                                            height: window_height as f64,
+                                        }));
+                                        let _ = w.show();
+                                        BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                        sync_toggle_menu_item(&app_handle_timeout, true);
+                                        let full_size = ball_size_val + BALL_PADDING * 2;
+                                        apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                                    } else {
+                                        // 未登录：触发前端登录检查流程
+                                        let _ = w.emit("request-login-check", ());
+                                    }
                                 }
                             }
                         });
