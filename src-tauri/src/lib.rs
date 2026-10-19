@@ -3745,8 +3745,20 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // 第二个实例启动时，把已有主窗口显示并聚焦
             if let Some(window) = app.webview_windows().get("main") {
+                // show 之前确保窗口尺寸正确，避免尺寸不对导致悬浮球变形
+                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                let window_width = ball_size_val + 1 + 36 + 2;
+                let window_height = ball_size_val + BALL_PADDING * 2;
+                let _ = window.set_size(Size::Logical(tauri::LogicalSize {
+                    width: window_width as f64,
+                    height: window_height as f64,
+                }));
                 let _ = window.show();
                 let _ = window.set_focus();
+                BALL_VISIBLE.store(true, Ordering::SeqCst);
+                // Windows 上 show() 后重新应用圆形遮罩，防止形状不对
+                let full_size = ball_size_val + BALL_PADDING * 2;
+                apply_circular_window_mask(&window, full_size, "single_instance");
             }
         }))
         .plugin(tauri_plugin_shell::init())
