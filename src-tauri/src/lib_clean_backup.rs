@@ -216,39 +216,46 @@ fn calculate_dir_size(path: &Path) -> (u64, u64) {
     (total_size, file_count)
 }
 
-/// macOS 上用 du 命令获取废纸篓大小和文件数
-/// ~/.Trash 受隐私保护，fs::read_dir 可能被拒绝，du 有系统级权限
+/// macOS 上用 AppleScript (Finder) 获取废纸篓大小和文件数
+/// ~/.Trash 受 macOS TCC 隐私保护，fs::read_dir 和 du 都被拒绝
+/// Finder 有系统级权限，通过 AppleScript 调用可绕过限制
 #[cfg(target_os = "macos")]
-fn get_trash_size_macos(path: &Path) -> (u64, u64) {
-    // 先尝试 fs::read_dir（有权限时直接用）
-    let (size, count) = calculate_dir_size(path);
+fn get_trash_size_macos(_path: &Path) -> (u64, u64) {
+    // 先尝试 fs::read_dir（有权限时直接用，速度快）
+    let (size, count) = calculate_dir_size(_path);
     if size > 0 || count > 0 {
         return (size, count);
     }
 
-    // fs 读取失败（权限拒绝），改用 du 命令
-    let path_str = path.to_string_lossy().to_string();
-    let output = std::process::Command::new("du")
-        .args(["-sk", &path_str])
+    // fs 读取失败（TCC 权限拒绝），改用 AppleScript 调用 Finder
+    let script = r#"
+tell application "Finder"
+    set total to 0
+    set fileCount to 0
+    set items_list to every item of trash
+    repeat with f in items_list
+        try
+            set total to total + (physical size of f)
+            set fileCount to fileCount + 1
+        end try
+    end repeat
+    return (total as string) & "," & (fileCount as string)
+end tell
+"#;
+
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
         .output();
 
     if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        // du -sk 输出格式: "12345\t/Users/xxx/.Trash"
-        if let Some(size_str) = stdout.split('\t').next() {
-            if let Ok(kb) = size_str.trim().parse::<u64>() {
-                let bytes = kb * 1024;
-                // 用 ls 统计文件数
-                let ls_output = std::process::Command::new("ls")
-                    .args(["-1", &path_str])
-                    .output();
-                let file_count = if let Ok(ls_out) = ls_output {
-                    let ls_stdout = String::from_utf8_lossy(&ls_out.stdout).to_string();
-                    ls_stdout.lines().count() as u64
-                } else {
-                    0
-                };
-                return (bytes, file_count);
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let parts: Vec<&str> = stdout.trim().split(',').collect();
+            if parts.len() == 2 {
+                let size = parts[0].parse::<u64>().unwrap_or(0);
+                let count = parts[1].parse::<u64>().unwrap_or(0);
+                return (size, count);
             }
         }
     }

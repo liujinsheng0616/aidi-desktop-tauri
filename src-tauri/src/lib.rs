@@ -501,11 +501,16 @@ fn open_screenshot_preview(data_url: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("打开预览失败: {e}"))?;
     #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("打开预览失败: {e}"))?;
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(&path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("打开预览失败: {e}"))?;
+    }
     Ok(())
 }
 
@@ -1685,7 +1690,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
 
     let builder = tauri::WebviewWindowBuilder::new(app, "menu", blank_url)
         .title("Menu")
-        .inner_size(192.0, 196.0)
+        .inner_size(192.0, 224.0)
         .decorations(false)
         .transparent(menu_transparent)
         .always_on_top(true)
@@ -1795,7 +1800,7 @@ fn create_menu_window(app: &tauri::AppHandle, direction: &str) -> Result<tauri::
                                         }
                                         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
                                             width: 192.0,
-                                            height: 196.0,
+                                            height: 224.0,
                                         }));
                                     }
                                 }
@@ -2393,11 +2398,16 @@ async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_s
 fn open_external_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // 不使用 cmd /c start，因为 cmd 会把 URL 中的 & 当作命令分隔符，
-        // 导致含多个 query 参数的链接被拆成多条命令（打开多个窗口）。
-        // explorer.exe 不解析 &，直接用默认浏览器打开 URL。
-        std::process::Command::new("explorer.exe")
-            .arg(&url)
+        // 使用 cmd /c start "" "URL" 打开链接：
+        // - start 是 cmd 内置命令，调用系统默认浏览器
+        // - 第一个 "" 是窗口标题占位（否则 start 会把 URL 当标题）
+        // - URL 用引号包裹，& 不会被当作命令分隔符
+        // - CREATE_NO_WINDOW 避免 cmd 窗口闪现
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("打开链接失败: {}", e))?;
     }
@@ -2578,7 +2588,7 @@ fn show_menu(app: tauri::AppHandle) {
 
     // 菜单尺寸常量
     let menu_width: i32 = 192;
-    let menu_height: i32 = 196;
+    let menu_height: i32 = 224;
     let menu_gap: i32 = 0;
 
     // 获取球的逻辑位置
@@ -2734,7 +2744,7 @@ fn hide_menu(app: tauri::AppHandle) {
         // 重置窗口大小为主菜单尺寸，避免下次显示时出现抖动
         let _ = menu_window.set_size(Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 196.0,
+            height: 224.0,
         }));
         let _ = menu_window.hide();
     }
@@ -2789,7 +2799,7 @@ fn menu_collapse(app: tauri::AppHandle) {
         }
         let _ = w.set_size(tauri::Size::Logical(tauri::LogicalSize {
             width: 192.0,
-            height: 196.0,
+            height: 224.0,
         }));
     }
 }
@@ -2963,12 +2973,30 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
 #[tauri::command]
 async fn check_update() -> Result<UpdateInfo, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
-    let resp = reqwest::get(UPDATE_MANIFEST_URL)
-        .await
-        .map_err(|e| format!("请求版本清单失败: {}", e))?;
-    let manifest: UpdateManifest = resp.json()
-        .await
-        .map_err(|e| format!("解析版本清单失败: {}", e))?;
+
+    // 网络失败时仍返回当前版本号，避免前端显示 "v..." 空白
+    let resp = match reqwest::get(UPDATE_MANIFEST_URL).await {
+        Ok(r) => r,
+        Err(_) => return Ok(UpdateInfo {
+            has_update: false,
+            current_version,
+            latest_version: String::new(),
+            release_notes: String::new(),
+            download_url: String::new(),
+            download_size: 0,
+        }),
+    };
+    let manifest: UpdateManifest = match resp.json().await {
+        Ok(m) => m,
+        Err(_) => return Ok(UpdateInfo {
+            has_update: false,
+            current_version,
+            latest_version: String::new(),
+            release_notes: String::new(),
+            download_url: String::new(),
+            download_size: 0,
+        }),
+    };
 
     let has_update = version_is_newer(&manifest.version, &current_version);
 
@@ -3033,6 +3061,74 @@ async fn download_and_install_update(
     });
 
     Ok(())
+}
+
+/// 下载软件安装包并调起安装（供前端白名单软件一键安装）
+/// 仅支持 Windows；macOS 返回错误提示
+#[tauri::command]
+async fn download_and_install_software(
+    _app: tauri::AppHandle,
+    download_url: String,
+) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = &download_url;
+        return Err("这些软件安装包均为 Windows 版本，无法在 macOS 上运行，请在 Windows 电脑上使用此功能".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let tmp_dir = std::env::temp_dir();
+        // 从 URL 中提取文件名，fallback 用时间戳
+        let file_name = download_url
+            .rsplit('/')
+            .next()
+            .unwrap_or("software_installer")
+            .to_string();
+        let save_path = tmp_dir.join(format!("aidi-software-{}", file_name));
+
+        let resp = reqwest::get(&download_url)
+            .await
+            .map_err(|e| format!("下载失败: {}", e))?;
+        let bytes = resp.bytes()
+            .await
+            .map_err(|e| format!("读取下载内容失败: {}", e))?;
+        std::fs::write(&save_path, &bytes)
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+
+        // 启动安装包并等待安装完成
+        let mut child = std::process::Command::new(&save_path)
+            .spawn()
+            .map_err(|e| {
+                // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
+                if e.raw_os_error() == Some(740) {
+                    "安装需要管理员权限，UAC 被拒绝或未弹出，请右键安装包以管理员身份运行".to_string()
+                } else {
+                    format!("打开安装包失败: {}", e)
+                }
+            })?;
+
+        // 等待安装程序退出（阻塞直到用户完成或取消安装）
+        let exit_status = child.wait()
+            .map_err(|e| format!("等待安装程序退出失败: {}", e))?;
+
+        let exit_code = exit_status.code().unwrap_or(-1);
+        if exit_status.success() {
+            Ok(save_path.to_string_lossy().to_string())
+        } else {
+            Err(format!(
+                "安装未完成（退出码: {}），安装包已保存到: {}",
+                exit_code,
+                save_path.to_string_lossy()
+            ))
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = &download_url;
+        Err("当前操作系统不支持软件安装功能".to_string())
+    }
 }
 
 /// 设置上报用户信息（供前端调用）
@@ -3430,6 +3526,41 @@ async fn optimizer_system_info(_app: tauri::AppHandle) -> Result<serde_json::Val
 }
 
 #[tauri::command]
+async fn optimizer_perf_sample(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("perf-sample"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_ssd_health(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("ssd-health"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_battery_report(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("battery-report"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_hw_errors(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("hw-errors"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+async fn optimizer_memory_gpu_diag(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| run_script("memory-gpu-diag"))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
 async fn show_login_window(app: tauri::AppHandle) {
     // 先隐藏所有非 login 窗口
     let windows = app.webview_windows();
@@ -3614,8 +3745,20 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // 第二个实例启动时，把已有主窗口显示并聚焦
             if let Some(window) = app.webview_windows().get("main") {
+                // show 之前确保窗口尺寸正确，避免尺寸不对导致悬浮球变形
+                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                let window_width = ball_size_val + 1 + 36 + 2;
+                let window_height = ball_size_val + BALL_PADDING * 2;
+                let _ = window.set_size(Size::Logical(tauri::LogicalSize {
+                    width: window_width as f64,
+                    height: window_height as f64,
+                }));
                 let _ = window.show();
                 let _ = window.set_focus();
+                BALL_VISIBLE.store(true, Ordering::SeqCst);
+                // Windows 上 show() 后重新应用圆形遮罩，防止形状不对
+                let full_size = ball_size_val + BALL_PADDING * 2;
+                apply_circular_window_mask(&window, full_size, "single_instance");
             }
         }))
         .plugin(tauri_plugin_shell::init())
@@ -3845,30 +3988,33 @@ pub fn run() {
                     // 超时兜底：Windows 打包后 WebView2 初始化较慢，
                     // onMounted 里的异步 invoke 链路可能卡住导致 show_main_window
                     // 迟迟不被调用，窗口一直隐藏看起来像闪退。
-                    // 1.5 秒后如果窗口仍隐藏且已登录，后端主动 show。
-                    // 未登录时不干预（前端应走 show_login_window 分支）
+                    // 500ms 后如果窗口仍隐藏，后端主动 show（已登录显示球，未登录显示登录窗口）
                     #[cfg(target_os = "windows")]
                     {
                         let app_handle_timeout = app.handle().clone();
                         std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(1500));
-                            if !BALL_VISIBLE.load(Ordering::SeqCst) && IS_LOGGED_IN.load(Ordering::SeqCst) {
-                                // 前端可能已调 show_main_window（BALL_VISIBLE=true），此时不再干预
-                                // 若仍为 false 且已登录，说明前端异步链路未完成，主动显示
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            if !BALL_VISIBLE.load(Ordering::SeqCst) {
+                                let is_logged_in = IS_LOGGED_IN.load(Ordering::SeqCst);
                                 if let Some(w) = app_handle_timeout.webview_windows().get("main") {
-                                    // show 之前确保窗口尺寸正确，避免内容被截断
                                     let ball_size_val = *BALL_SIZE.lock().unwrap();
-                                    let window_width = ball_size_val + 1 + 36 + 2;
-                                    let window_height = ball_size_val + BALL_PADDING * 2;
-                                    let _ = w.set_size(Size::Logical(tauri::LogicalSize {
-                                        width: window_width as f64,
-                                        height: window_height as f64,
-                                    }));
-                                    let _ = w.show();
-                                    BALL_VISIBLE.store(true, Ordering::SeqCst);
-                                    sync_toggle_menu_item(&app_handle_timeout, true);
-                                    let full_size = ball_size_val + BALL_PADDING * 2;
-                                    apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                                    if is_logged_in {
+                                        // 已登录：显示悬浮球
+                                        let window_width = ball_size_val + 1 + 36 + 2;
+                                        let window_height = ball_size_val + BALL_PADDING * 2;
+                                        let _ = w.set_size(Size::Logical(tauri::LogicalSize {
+                                            width: window_width as f64,
+                                            height: window_height as f64,
+                                        }));
+                                        let _ = w.show();
+                                        BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                        sync_toggle_menu_item(&app_handle_timeout, true);
+                                        let full_size = ball_size_val + BALL_PADDING * 2;
+                                        apply_circular_window_mask(&w, full_size, "timeout_fallback");
+                                    } else {
+                                        // 未登录：触发前端登录检查流程
+                                        let _ = w.emit("request-login-check", ());
+                                    }
                                 }
                             }
                         });
@@ -3976,6 +4122,11 @@ pub fn run() {
             optimizer_startup_list,
             optimizer_startup_toggle,
             optimizer_system_info,
+            optimizer_perf_sample,
+            optimizer_ssd_health,
+            optimizer_battery_report,
+            optimizer_hw_errors,
+            optimizer_memory_gpu_diag,
             optimizer_disk_clean,
             show_login_window,
             close_login_window,
@@ -4003,6 +4154,7 @@ pub fn run() {
             feishu::bitable::feishu_report_device,
             check_update,
             download_and_install_update,
+            download_and_install_software,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

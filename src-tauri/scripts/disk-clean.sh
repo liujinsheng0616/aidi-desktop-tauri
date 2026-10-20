@@ -133,17 +133,66 @@ if contains "prefetch"; then
     fi
 fi
 
-# Empty trash (recycleBin)
+# Empty trash (recycleBin) - macOS TCC 隐私保护阻止 bash 直接访问 ~/.Trash
+# 改用 AppleScript 调用 Finder 清空废纸篓（Finder 有系统级权限）
 if contains "recycleBin"; then
     if [ -d "$HOME/.Trash" ]; then
-        for item in "$HOME/.Trash"/*; do
-            [ -e "$item" ] || continue
-            if [ -d "$item" ]; then
-                try_delete_dir "$item" "recycleBin"
+        # 先用 AppleScript 获取清空前的大小
+        osascript_result=$(osascript -e '
+        tell application "Finder"
+            set total to 0
+            set fileCount to 0
+            set items_list to every item of trash
+            repeat with f in items_list
+                try
+                    set total to total + (physical size of f)
+                    set fileCount to fileCount + 1
+                end try
+            end repeat
+            return (total as string) & "," & (fileCount as string)
+        end tell' 2>/dev/null)
+        if [ -n "$osascript_result" ]; then
+            trash_size_before=$(echo "$osascript_result" | cut -d',' -f1 | awk '{printf "%.0f", $1}')
+            trash_count_before=$(echo "$osascript_result" | cut -d',' -f2 | tr -d ' ')
+        else
+            trash_size_before=0
+            trash_count_before=0
+        fi
+
+        if [ "$trash_size_before" -gt 0 ]; then
+            # 用 AppleScript 清空废纸篓
+            osascript -e 'tell application "Finder" to empty trash' 2>/dev/null
+            # 等待清空完成（empty trash 是异步的）
+            sleep 2
+
+            # 检查清空后的大小
+            osascript_after=$(osascript -e '
+            tell application "Finder"
+                set total to 0
+                set items_list to every item of trash
+                repeat with f in items_list
+                    try
+                        set total to total + (physical size of f)
+                    end try
+                end repeat
+                return total as string
+            end tell' 2>/dev/null)
+            if [ -n "$osascript_after" ]; then
+                trash_size_after=$(echo "$osascript_after" | awk '{printf "%.0f", $1}')
             else
-                try_delete_file "$item" "recycleBin"
+                trash_size_after=0
             fi
-        done
+
+            actual_cleaned=$((trash_size_before - trash_size_after))
+            if [ "$actual_cleaned" -gt 0 ]; then
+                cleaned=$((cleaned + actual_cleaned))
+                success_count=$((success_count + 1))
+                add_detail "recycleBin" "$HOME/.Trash" "$actual_cleaned" "success" ""
+            else
+                failed_count=$((failed_count + 1))
+                add_detail "recycleBin" "$HOME/.Trash" "$trash_size_before" "failed" "清空废纸篓失败"
+            fi
+        fi
     fi
 fi
 

@@ -23,9 +23,9 @@ while IFS= read -r line; do
     size_bytes=$((size_kb * 1024))
     used_bytes=$((used_kb * 1024))
     free_bytes=$((avail_kb * 1024))
-    size_gb=$(echo "scale=2; $size_bytes / 1073741824" | bc)
-    used_gb=$(echo "scale=2; $used_bytes / 1073741824" | bc)
-    free_gb=$(echo "scale=2; $free_bytes / 1073741824" | bc)
+    size_gb=$(echo "scale=2; $size_bytes / 1073741824" | bc | awk '{printf "%.2f", $0}')
+    used_gb=$(echo "scale=2; $used_bytes / 1073741824" | bc | awk '{printf "%.2f", $0}')
+    free_gb=$(echo "scale=2; $free_bytes / 1073741824" | bc | awk '{printf "%.2f", $0}')
 
     # Determine status
     if [ "$capacity" -gt 90 ]; then
@@ -74,8 +74,8 @@ while IFS= read -r disk; do
     fi
 done <<< "$disk_info"
 
-# Count volumes
-vol_count=$(echo "$volumes" | tr ',' '\n' | wc -l | tr -d ' ')
+# Count volumes (count number of "drive" keys instead of commas)
+vol_count=$(echo "$volumes" | grep -o '"drive"' | wc -l | tr -d ' ')
 
 # Output JSON
 cat << EOF

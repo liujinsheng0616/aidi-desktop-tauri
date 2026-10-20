@@ -10,7 +10,8 @@ pub const APP_SECRET: &str = "GLki6s9Gr93lfvPkRvb4KeK6KLzMzQyH";
 /// 开发时前端用 http://127.0.0.1:5173/oauth-callback.html，需在飞书控制台同时注册两个地址
 /// 此处由 Rust 换 token 时发送，必须与前端授权时的 redirect_uri 完全一致
 pub fn redirect_uri() -> &'static str {
-    if cfg!(debug_assertions) {
+    let env = std::env::var("AIDI_ENV").unwrap_or_default();
+    if env == "dev" || cfg!(debug_assertions) {
         "http://127.0.0.1:5173/oauth-callback.html"
     } else {
         "https://aidi.yadea.com.cn/aidi-desktop/oauth-callback.html"
