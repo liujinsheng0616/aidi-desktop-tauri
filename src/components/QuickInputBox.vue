@@ -88,8 +88,9 @@ function toggleInput() {
           inputRef.value.style.overflowY = textareaActualHeight >= 140 ? 'auto' : 'hidden'
         }
         emit('heightChange', textareaHeight.value)
-      } else if (inputText.value) {
-        // 没有保存高度但有内容时，重新计算
+      } else {
+        // 无论有无文字，都调用 autoResize 确保 textarea 高度正确
+        // 否则 textarea 保持 height:auto，浏览器默认 padding 会导致渲染偏高
         autoResize()
       }
     }, 50)
@@ -600,6 +601,7 @@ onUnmounted(() => {
   resize: none;
   line-height: 28px;
   min-height: 28px;
+  padding: 0;
 }
 
 .chat-input::placeholder {
