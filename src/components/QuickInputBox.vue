@@ -74,26 +74,26 @@ function toggleInput() {
     // 通知 ChatView 检查是否需要显示聊天窗口（使用 Tauri 全局事件）
     emitTauriEvent('input-expanded').catch(() => {})
 
-    // 展开后自动聚焦输入框并调整高度
+    // 展开后自动聚焦输入框
     setTimeout(() => {
       inputRef.value?.focus()
-      // 优先恢复保存的高度
+    }, 50)
+
+    // 等展开动画（200ms）结束后再计算高度，否则 textarea 宽度过窄导致
+    // placeholder "AIDI 一下，你就知道~" 折行，scrollHeight 返回多行高度
+    setTimeout(() => {
       if (savedHeight.value > 0) {
         textareaHeight.value = savedHeight.value
-        // 同步设置 textarea 元素高度（容器高度 - 24px padding）
         if (inputRef.value) {
           const textareaActualHeight = savedHeight.value - 24
           inputRef.value.style.height = `${textareaActualHeight}px`
-          // 判断是否需要滚动条
           inputRef.value.style.overflowY = textareaActualHeight >= 140 ? 'auto' : 'hidden'
         }
         emit('heightChange', textareaHeight.value)
       } else {
-        // 无论有无文字，都调用 autoResize 确保 textarea 高度正确
-        // 否则 textarea 保持 height:auto，浏览器默认 padding 会导致渲染偏高
         autoResize()
       }
-    }, 50)
+    }, 220)
   } else {
     // 收起时：隐藏聊天窗口
     invoke('hide_chat_window').catch(() => {})
@@ -143,7 +143,11 @@ function autoResize() {
 
   // 先重置高度以获取真实的 scrollHeight
   textarea.style.height = 'auto'
-  const scrollHeight = textarea.scrollHeight
+  const rawScrollHeight = textarea.scrollHeight
+  // 空输入时 placeholder 换行不应撑高输入框（展开动画期间 textarea 宽度过窄会导致 placeholder 折行）
+  const scrollHeight = (!inputText.value || !inputText.value.trim())
+    ? Math.min(rawScrollHeight, 28)
+    : rawScrollHeight
   const maxHeight = 140 // 约 7 行
 
   let textareaActualHeight: number
