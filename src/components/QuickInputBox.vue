@@ -232,6 +232,41 @@ function stopMessage() {
   emitTauriEvent('stop-chat-stream').catch(() => {})
 }
 
+// 粘贴图片处理（Cmd+V / Ctrl+V 系统截图工具截取的图片）
+async function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault()
+      const blob = item.getAsFile()
+      if (!blob) continue
+      if (pendingScreenshots.value.length >= 9) return
+      const dataUrl = await blobToDataURL(blob)
+      invoke('store_pending_screenshot', { dataUrl }).catch(() => {})
+      pendingScreenshots.value.push(dataUrl)
+      if (!isExpanded.value) {
+        toggleInput()
+      } else {
+        nextTick(() => {
+          inputRef.value?.focus()
+          autoResize()
+        })
+      }
+    }
+  }
+}
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
 // 按键处理
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -366,6 +401,7 @@ onUnmounted(() => {
               :disabled="isSending"
               @keydown="handleKeydown"
               @input="autoResize"
+              @paste="handlePaste"
             />
             <!-- IT 数据库检索切换按钮 -->
             <button

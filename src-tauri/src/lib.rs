@@ -464,6 +464,16 @@ fn get_pending_screenshot() -> Vec<String> {
     }
 }
 
+/// 前端粘贴图片时存入后端缓存（与截图快捷键走同一通道，ChatView 发送时统一拉取）
+#[tauri::command]
+fn store_pending_screenshot(data_url: String) {
+    if let Ok(mut slot) = space_screenshot::LATEST_SCREENSHOT.lock() {
+        if slot.len() < 9 {
+            slot.push(data_url);
+        }
+    }
+}
+
 /// 打开「屏幕录制」权限设置面板（由前端提示行点击触发）
 ///
 /// 不受 SETTINGS_OPENED 闩锁限制：闩锁的目的是防止「每按一次快捷键就自动弹一个设置窗口」，
@@ -4145,6 +4155,7 @@ pub fn run() {
             trigger_screenshot,
             get_pending_screenshot,
             clear_pending_screenshot,
+            store_pending_screenshot,
             open_screenshot_preview,
             open_screen_recording_settings,
             update_chat_window_position,
