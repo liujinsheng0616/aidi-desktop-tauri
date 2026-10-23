@@ -612,8 +612,6 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.38);
   text-align: center;
   font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
 }
 
 .chat-input:disabled {
