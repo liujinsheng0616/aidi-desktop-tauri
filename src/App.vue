@@ -203,7 +203,7 @@ onMounted(async () => {
         localStorage.setItem('aidi-user', JSON.stringify(user))
       }
     } else {
-      // auth.json 不存在或为空，清除 localStorage 拘留（退出时清理的兜底）
+      // auth.json 不存在或为空，清除 localStorage 残留（退出时清理的兜底）
       localStorage.removeItem('aidi-user')
       localStorage.removeItem('aidi-token')
     }
