@@ -202,6 +202,10 @@ onMounted(async () => {
       if (user && user.id) {
         localStorage.setItem('aidi-user', JSON.stringify(user))
       }
+    } else {
+      // auth.json 不存在或为空，清除 localStorage 拘留（退出时清理的兜底）
+      localStorage.removeItem('aidi-user')
+      localStorage.removeItem('aidi-token')
     }
   } catch (e) {
     console.warn('读取登录信息失败:', e)

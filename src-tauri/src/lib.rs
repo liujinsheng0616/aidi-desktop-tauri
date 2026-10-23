@@ -3728,13 +3728,20 @@ fn clear_login_state(app: tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    // 2. 重置全局登录状态
+    // 2. 清除主窗口 localStorage 中的登录信息（防止重启后 isLoggedIn 仍返回 true）
+    if let Some(main_window) = app.webview_windows().get("main") {
+        let _ = main_window.eval(
+            "localStorage.removeItem('aidi-user'); localStorage.removeItem('aidi-token');"
+        );
+    }
+
+    // 3. 重置全局登录状态
     IS_LOGGED_IN.store(false, Ordering::SeqCst);
 
-    // 3. 清除上报线程的用户信息
+    // 4. 清除上报线程的用户信息
     report_worker::set_user_info(String::new(), String::new());
 
-    // 4. 更新托盘菜单
+    // 5. 更新托盘菜单
     rebuild_tray_menu(&app, false, false);
 
     Ok(())
@@ -3836,6 +3843,7 @@ pub fn run() {
                             let app = tray.app_handle().clone();
                             match event.id.as_ref() {
                                 "quit" => {
+                                    let _ = clear_login_state(app.clone());
                                     app.exit(0);
                                 }
                                 "login" => {
@@ -3937,6 +3945,7 @@ pub fn run() {
                             }
                         }
                         "quit" => {
+                            let _ = clear_login_state(app.clone());
                             app.exit(0);
                         }
                         _ => {}
