@@ -244,7 +244,8 @@ async function handlePaste(e: ClipboardEvent) {
       if (!blob) continue
       if (pendingScreenshots.value.length >= 9) return
       const dataUrl = await blobToDataURL(blob)
-      invoke('store_pending_screenshot', { dataUrl }).catch(() => {})
+      // 先 await 确保后端缓存完成，避免用户粘贴后立即发送时 ChatView 取不到图
+      await invoke('store_pending_screenshot', { dataUrl }).catch(() => {})
       pendingScreenshots.value.push(dataUrl)
       if (!isExpanded.value) {
         toggleInput()
