@@ -237,24 +237,33 @@ async function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
 
-  for (const item of items) {
+  // 先同步扫描所有 item，只要有图片就立即 preventDefault，
+  // 避免 await 期间浏览器执行默认粘贴（把文本/HTML 插入 textarea）
+  const imageBlobs: Blob[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
     if (item.type.startsWith('image/')) {
-      e.preventDefault()
       const blob = item.getAsFile()
-      if (!blob) continue
-      if (pendingScreenshots.value.length >= 9) return
-      const dataUrl = await blobToDataURL(blob)
-      // 先 await 确保后端缓存完成，避免用户粘贴后立即发送时 ChatView 取不到图
-      await invoke('store_pending_screenshot', { dataUrl }).catch(() => {})
-      pendingScreenshots.value.push(dataUrl)
-      if (!isExpanded.value) {
-        toggleInput()
-      } else {
-        nextTick(() => {
-          inputRef.value?.focus()
-          autoResize()
-        })
-      }
+      if (blob) imageBlobs.push(blob)
+    }
+  }
+
+  if (imageBlobs.length === 0) return // 纯文本粘贴，走浏览器默认行为
+  e.preventDefault()
+
+  for (const blob of imageBlobs) {
+    if (pendingScreenshots.value.length >= 9) break
+    const dataUrl = await blobToDataURL(blob)
+    // 先 await 确保后端缓存完成，避免用户粘贴后立即发送时 ChatView 取不到图
+    await invoke('store_pending_screenshot', { dataUrl }).catch(() => {})
+    pendingScreenshots.value.push(dataUrl)
+    if (!isExpanded.value) {
+      toggleInput()
+    } else {
+      nextTick(() => {
+        inputRef.value?.focus()
+        autoResize()
+      })
     }
   }
 }
