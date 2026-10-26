@@ -54,9 +54,9 @@ function getHealthStatusText(healthStatus: string) {
         :key="vol.drive"
         class="border rounded p-2 space-y-2"
       >
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">{{ vol.drive }} {{ vol.label }}</span>
-          <Badge :variant="getStatusVariant(vol.status)" class="text-xs">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-sm font-medium min-w-0 truncate">{{ vol.drive }} {{ vol.label }}</span>
+          <Badge :variant="getStatusVariant(vol.status)" class="text-xs shrink-0 whitespace-nowrap">
             {{ getStatusText(vol.status) }}
           </Badge>
         </div>
@@ -74,10 +74,10 @@ function getHealthStatusText(healthStatus: string) {
         <div
           v-for="disk in details.physicalDisks"
           :key="disk.name"
-          class="flex items-center justify-between text-xs"
+          class="flex items-center justify-between text-xs gap-2"
         >
-          <span class="break-all max-w-[200px]" :title="disk.name">{{ disk.name }}</span>
-          <span class="text-muted-foreground">
+          <span class="break-all max-w-[200px] min-w-0" :title="disk.name">{{ disk.name }}</span>
+          <span class="text-muted-foreground shrink-0 whitespace-nowrap">
             {{ getMediaTypeText(disk.mediaType) }} | {{ disk.sizeGB }} GB | {{ getHealthStatusText(disk.healthStatus) }}
           </span>
         </div>
