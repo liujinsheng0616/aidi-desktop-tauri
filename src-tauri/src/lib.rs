@@ -107,6 +107,8 @@ mod hotkey {
         if let Some(window) = app.webview_windows().get("main") {
             let visible = BALL_VISIBLE.load(Ordering::SeqCst);
             if visible {
+                // 先通知前端收起输入框（必须在 hide 之前，否则 webview 被节流事件丢失）
+                let _ = window.emit("ball-toggled-hidden", ());
                 // 隐藏悬浮球时同时隐藏聊天窗口，避免输入框展开状态下只剩聊天窗口
                 if let Some(chat_window) = app.webview_windows().get("chat") {
                     let _ = chat_window.hide();
@@ -114,8 +116,6 @@ mod hotkey {
                 let _ = window.hide();
                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                 sync_toggle_menu_item(app, false);
-                // 通知前端收起输入框，下次显示时回到初始状态
-                let _ = window.emit("ball-toggled-hidden", ());
             } else {
                 // 先设置回球尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
                 let ball_size_val = *BALL_SIZE.lock().unwrap();
@@ -124,6 +124,8 @@ mod hotkey {
                     width: full_size as f64,
                     height: full_size as f64,
                 }));
+                // 兜底：再次通知前端收起，防止上次 emit 在窗口隐藏后丢失
+                let _ = window.emit("ball-toggled-hidden", ());
                 let _ = window.show();
                 BALL_VISIBLE.store(true, Ordering::SeqCst);
                 sync_toggle_menu_item(app, true);
@@ -209,6 +211,8 @@ fn register_hotkey_windows(app: AppHandle) {
                         let visible = BALL_VISIBLE.load(Ordering::SeqCst);
                         if let Some(window) = app.webview_windows().get("main") {
                             if visible {
+                                // 先通知前端收起输入框（必须在 hide 之前，否则 webview 被节流事件丢失）
+                                let _ = window.emit("ball-toggled-hidden", ());
                                 // 隐藏悬浮球时同时隐藏聊天窗口，避免输入框展开状态下只剩聊天窗口
                                 if let Some(chat_window) = app.webview_windows().get("chat") {
                                     let _ = chat_window.hide();
@@ -216,8 +220,6 @@ fn register_hotkey_windows(app: AppHandle) {
                                 let _ = window.hide();
                                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, false);
-                                // 通知前端收起输入框，下次显示时回到初始状态
-                                let _ = window.emit("ball-toggled-hidden", ());
                             } else {
                                 // 先设置回球尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
                                 let ball_size_val = *BALL_SIZE.lock().unwrap();
@@ -226,6 +228,8 @@ fn register_hotkey_windows(app: AppHandle) {
                                     width: full_size as f64,
                                     height: full_size as f64,
                                 }));
+                                // 兜底：再次通知前端收起，防止上次 emit 在窗口隐藏后丢失
+                                let _ = window.emit("ball-toggled-hidden", ());
                                 let _ = window.show();
                                 BALL_VISIBLE.store(true, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, true);
