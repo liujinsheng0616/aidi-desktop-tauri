@@ -117,11 +117,16 @@ mod hotkey {
                 // 通知前端收起输入框，下次显示时回到初始状态
                 let _ = window.emit("ball-toggled-hidden", ());
             } else {
+                // 先设置回球尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
+                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                let full_size = ball_size_val + BALL_PADDING * 2;
+                let _ = window.set_size(Size::Logical(tauri::LogicalSize {
+                    width: full_size as f64,
+                    height: full_size as f64,
+                }));
                 let _ = window.show();
                 BALL_VISIBLE.store(true, Ordering::SeqCst);
                 sync_toggle_menu_item(app, true);
-                let ball_size_val = *BALL_SIZE.lock().unwrap();
-                let full_size = ball_size_val + BALL_PADDING * 2;
                 apply_circular_window_mask(window, full_size, "shortcut_toggle");
             }
         }
@@ -214,11 +219,16 @@ fn register_hotkey_windows(app: AppHandle) {
                                 // 通知前端收起输入框，下次显示时回到初始状态
                                 let _ = window.emit("ball-toggled-hidden", ());
                             } else {
+                                // 先设置回球尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
+                                let ball_size_val = *BALL_SIZE.lock().unwrap();
+                                let full_size = ball_size_val + BALL_PADDING * 2;
+                                let _ = window.set_size(Size::Logical(tauri::LogicalSize {
+                                    width: full_size as f64,
+                                    height: full_size as f64,
+                                }));
                                 let _ = window.show();
                                 BALL_VISIBLE.store(true, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, true);
-                                let ball_size_val = *BALL_SIZE.lock().unwrap();
-                                let full_size = ball_size_val + BALL_PADDING * 2;
                                 apply_circular_window_mask(window, full_size, "shortcut_toggle");
                             }
                         }
