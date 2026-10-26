@@ -50,9 +50,9 @@ if [ $freed -lt 0 ]; then
     freed=0
 fi
 
-freed_mb=$(echo "scale=2; $freed / 1048576" | bc)
-free_before_mb=$(echo "scale=2; $free_before / 1048576" | bc)
-free_after_mb=$(echo "scale=2; $free_after / 1048576" | bc)
+freed_mb=$(echo "scale=2; $freed / 1048576" | bc | awk '{printf "%.2f", $0}')
+free_before_mb=$(echo "scale=2; $free_before / 1048576" | bc | awk '{printf "%.2f", $0}')
+free_after_mb=$(echo "scale=2; $free_after / 1048576" | bc | awk '{printf "%.2f", $0}')
 
 # Build per-process details from top 5 processes
 details=""
@@ -76,9 +76,9 @@ while IFS= read -r line_before; do
         proc_freed=0
     fi
 
-    proc_freed_mb=$(echo "scale=2; $proc_freed / 1024" | bc)
-    rss_before_mb=$(echo "scale=2; $rss_before / 1024" | bc)
-    rss_after_mb=$(echo "scale=2; $rss_after / 1024" | bc)
+    proc_freed_mb=$(echo "scale=2; $proc_freed / 1024" | bc | awk '{printf "%.2f", $0}')
+    rss_before_mb=$(echo "scale=2; $rss_before / 1024" | bc | awk '{printf "%.2f", $0}')
+    rss_after_mb=$(echo "scale=2; $rss_after / 1024" | bc | awk '{printf "%.2f", $0}')
 
     # Escape name for JSON
     escaped_name=$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n\t\r')
