@@ -174,9 +174,13 @@ function autoResize() {
 // 移除截图预览（按索引删除单张）
 function removeScreenshot(index: number) {
   pendingScreenshots.value.splice(index, 1)
-  if (pendingScreenshots.value.length === 0) {
-    invoke('clear_pending_screenshot').catch(() => {})
-  }
+  // 同步后端缓存：先清空，再把剩余的重新存入
+  // 否则 get_pending_screenshot 会取到已删除的图
+  invoke('clear_pending_screenshot').then(() => {
+    pendingScreenshots.value.forEach(url => {
+      invoke('store_pending_screenshot', { dataUrl: url }).catch(() => {})
+    })
+  }).catch(() => {})
   // 截图行变化后重算容器高度
   nextTick(() => autoResize())
 }
