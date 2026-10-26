@@ -33,6 +33,7 @@ let unlistenStreamEnd: UnlistenFn | null = null
 let unlistenStreamStart: UnlistenFn | null = null
 let unlistenQuickScreenshot: UnlistenFn | null = null
 let unlistenScreenshotPermission: UnlistenFn | null = null
+let unlistenBallToggled: UnlistenFn | null = null
 
 const ballSize = computed(() => props.size || 60)
 
@@ -312,6 +313,12 @@ onMounted(async () => {
     isSending.value = false
     nextTick(() => inputRef.value?.focus())
   })
+  // 监听悬浮球隐藏事件（Cmd+D/Ctrl+D 隐藏时），收起输入框回到初始状态
+  unlistenBallToggled = await listen('ball-toggled-hidden', () => {
+    if (isExpanded.value) {
+      collapseInput()
+    }
+  })
   // 监听截图预览（长按空格 / Cmd+E，自动展开输入框并挂上缩略图）
   unlistenQuickScreenshot = await listen<{ imageBase64: string }>('quick-screenshot-preview', (event) => {
     if (event.payload?.imageBase64) {
@@ -349,6 +356,7 @@ onUnmounted(() => {
   if (unlistenStreamEnd) unlistenStreamEnd()
   if (unlistenQuickScreenshot) unlistenQuickScreenshot()
   if (unlistenScreenshotPermission) unlistenScreenshotPermission()
+  if (unlistenBallToggled) unlistenBallToggled()
   if (noticeTimer) clearTimeout(noticeTimer)
 })
 </script>

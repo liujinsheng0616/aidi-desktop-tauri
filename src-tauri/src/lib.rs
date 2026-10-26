@@ -107,9 +107,15 @@ mod hotkey {
         if let Some(window) = app.webview_windows().get("main") {
             let visible = BALL_VISIBLE.load(Ordering::SeqCst);
             if visible {
+                // 隐藏悬浮球时同时隐藏聊天窗口，避免输入框展开状态下只剩聊天窗口
+                if let Some(chat_window) = app.webview_windows().get("chat") {
+                    let _ = chat_window.hide();
+                }
                 let _ = window.hide();
                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                 sync_toggle_menu_item(app, false);
+                // 通知前端收起输入框，下次显示时回到初始状态
+                let _ = window.emit("ball-toggled-hidden", ());
             } else {
                 let _ = window.show();
                 BALL_VISIBLE.store(true, Ordering::SeqCst);
@@ -198,9 +204,15 @@ fn register_hotkey_windows(app: AppHandle) {
                         let visible = BALL_VISIBLE.load(Ordering::SeqCst);
                         if let Some(window) = app.webview_windows().get("main") {
                             if visible {
+                                // 隐藏悬浮球时同时隐藏聊天窗口，避免输入框展开状态下只剩聊天窗口
+                                if let Some(chat_window) = app.webview_windows().get("chat") {
+                                    let _ = chat_window.hide();
+                                }
                                 let _ = window.hide();
                                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, false);
+                                // 通知前端收起输入框，下次显示时回到初始状态
+                                let _ = window.emit("ball-toggled-hidden", ());
                             } else {
                                 let _ = window.show();
                                 BALL_VISIBLE.store(true, Ordering::SeqCst);
