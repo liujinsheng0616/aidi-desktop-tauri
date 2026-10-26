@@ -3164,13 +3164,197 @@ async fn download_and_install_update(
     Ok(())
 }
 
+// ── 软件安装状态检测（问题 1 + 问题 2）──────────────────────────────────────
+// 问题 1（已装过的软件还会再装一遍）：前端按钮渲染后调用 check_software_installed
+//   查注册表，若已装则在按钮上方显示"当前已安装 vX.X，可覆盖重装"提示行。
+//   按钮始终可点，允许重装（用户拍板方案 D + "按钮始终可点"UX）。
+// 问题 2（安装中点关闭却显示成功）：download_and_install_software 不再依赖
+//   child.wait() 退出码（启动器型安装程序的退出码无意义），改为轮询注册表
+//   确认安装结果，超时返回 "unknown"（用户拍板方案 丙）。
+//
+// 注册表检测通过 PowerShell 实现，避免 windows crate 注册表 API 的版本差异，
+// 复用项目既有的"调平台脚本"模式。
+
+#[derive(serde::Serialize)]
+struct SoftwareStatus {
+    installed: bool,
+    version: Option<String>,
+    display_name: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct InstallResult {
+    save_path: String,
+    /// "installed" = 注册表确认已装；"unknown" = 未能确认（可能仍在安装、被取消、或无检测映射）
+    final_status: String,
+    version: Option<String>,
+    display_name: Option<String>,
+}
+
+/// 软件下载 URL 文件名子串 → 注册表 DisplayName 候选子串列表
+///
+/// 匹配规则：从下载 URL 提取文件名，与第一列做大小写不敏感的 contains 匹配；
+/// 命中后用第二列的候选子串去注册表 DisplayName 里做大小写不敏感 contains 匹配。
+///
+/// ⚠️ DisplayName 候选子串基于推测，实际注册表名称可能因版本/语言不同而异。
+/// 若检测不准，行为退化为"未检测到"（等同改动前），不会误报已安装。
+#[cfg(target_os = "windows")]
+const SOFTWARE_REGISTRY_MAP: &[(&str, &[&str])] = &[
+    ("VNC-SERVER", &["VNC"]),
+    ("WPS", &["WPS Office", "金山办公"]),
+    ("福昕PDF", &["Foxit", "福昕"]),
+    ("搜狗拼音", &["搜狗拼音", "Sogou Pinyin"]),
+    ("WinRAR", &["WinRAR"]),
+    ("理光打印", &["RICOH", "理光"]),
+    ("WeChatWin", &["微信", "WeChat"]),
+    ("pdfgear", &["PDFgear"]),
+    ("7z", &["7-Zip"]),
+    ("PotPlayer", &["PotPlayer"]),
+    ("腾讯会议", &["腾讯会议", "WeMeeting", "Tencent Meeting"]),
+    // 注意：URL 文件名 FreeCAD 与表格名称"CAD迷你看图"不一致，两个都试
+    ("FreeCAD", &["CAD迷你看图", "FreeCAD"]),
+    ("剪映", &["剪映", "JianyingPro", "CapCut"]),
+    ("影刀", &["影刀", "YingDao"]),
+    // 注意：URL 文件名 VisualStudioSetup 与表格名称"Visual Studio Code"不一致
+    ("VisualStudioSetup", &["Visual Studio Code", "Visual Studio"]),
+    ("CADReaderPc", &["CAD快速看图", "CADReader"]),
+    ("teams", &["Microsoft Teams"]),
+    ("WorkBuddy", &["WorkBuddy"]),
+    ("TraeCode", &["Trae"]),
+    ("Zoom", &["Zoom"]),
+    ("豆包", &["豆包", "Doubao"]),
+    ("搜狗 五笔", &["搜狗五笔", "Sogou Wubi"]),
+    ("Qoder", &["Qoder"]),
+    ("Postman", &["Postman"]),
+    ("Git.exe", &["Git"]),
+    ("ChromeSetup", &["Google Chrome"]),
+    ("钉钉", &["钉钉", "DingTalk"]),
+    ("dbeaver", &["DBeaver"]),
+    ("Foxmail", &["Foxmail"]),
+    ("网易有道", &["有道词典", "Youdao"]),
+    ("OBS", &["OBS Studio"]),
+    ("kimi", &["Kimi"]),
+    ("飞书", &["飞书", "Feishu", "Lark"]),
+    ("Feilian", &["飞连", "Feilian"]),
+    ("CitrixWorkspace", &["Citrix"]),
+    // PDF转换器、工业云插件等名称过于宽泛，不配置检测，回退到 "unknown"
+];
+
+/// 根据 URL 查找该软件的注册表 DisplayName 候选子串列表
+#[cfg(target_os = "windows")]
+fn lookup_display_names(download_url: &str) -> Option<&'static [&'static str]> {
+    let filename = download_url.rsplit('/').next()?.to_lowercase();
+    for (url_sub, display_names) in SOFTWARE_REGISTRY_MAP {
+        if filename.contains(&url_sub.to_lowercase()) {
+            return Some(display_names);
+        }
+    }
+    None
+}
+
+/// 通过 PowerShell 查询注册表 Uninstall 项，检测指定 DisplayName 子串的软件
+/// 返回 (display_name, display_version)；未找到返回 None
+#[cfg(target_os = "windows")]
+fn check_installed_via_powershell(display_name_substring: &str) -> Option<(String, String)> {
+    // PowerShell 单引号字符串中，单引号用两个单引号转义
+    let escaped = display_name_substring.replace('\'', "''");
+    let ps_script = format!(
+        r#"$ErrorActionPreference = 'SilentlyContinue'
+$paths = @(
+  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+$name = '{escaped}'
+$results = @()
+foreach ($p in $paths) {{
+    Get-ItemProperty $p | ForEach-Object {{
+        $dn = $_.DisplayName
+        if ($dn -and $dn.ToLower().Contains($name.ToLower())) {{
+            $results += [PSCustomObject]@{{ DisplayName = $dn; DisplayVersion = $_.DisplayVersion }}
+        }}
+    }}
+}}
+$results | ConvertTo-Json -Compress
+"#
+    );
+
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = stdout.trim();
+    if stdout.is_empty() || stdout == "null" {
+        return None;
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        #[serde(rename = "DisplayName")]
+        display_name: Option<String>,
+        #[serde(rename = "DisplayVersion")]
+        display_version: Option<String>,
+    }
+
+    // ConvertTo-Json 对单元素输出对象，对多元素输出数组
+    let entry: Entry = if stdout.starts_with('[') {
+        let arr: Vec<Entry> = serde_json::from_str(stdout).ok()?;
+        arr.into_iter().next()?
+    } else {
+        serde_json::from_str(stdout).ok()?
+    };
+
+    entry.display_name.map(|n| (n, entry.display_version.unwrap_or_default()))
+}
+
+/// 检测软件是否已安装（供前端按钮渲染后查询，显示"已安装"提示行）
+#[tauri::command]
+fn check_software_installed(download_url: String) -> Result<SoftwareStatus, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = &download_url;
+        return Ok(SoftwareStatus { installed: false, version: None, display_name: None });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let display_names = match lookup_display_names(&download_url) {
+            Some(names) => names,
+            None => return Ok(SoftwareStatus { installed: false, version: None, display_name: None }),
+        };
+        for name in display_names {
+            if let Some((dn, ver)) = check_installed_via_powershell(name) {
+                return Ok(SoftwareStatus {
+                    installed: true,
+                    version: if ver.is_empty() { None } else { Some(ver) },
+                    display_name: Some(dn),
+                });
+            }
+        }
+        Ok(SoftwareStatus { installed: false, version: None, display_name: None })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = &download_url;
+        Ok(SoftwareStatus { installed: false, version: None, display_name: None })
+    }
+}
+
 /// 下载软件安装包并调起安装（供前端白名单软件一键安装）
 /// 仅支持 Windows；macOS 返回错误提示
+///
+/// 问题 2 修复：不再依赖 child.wait() 退出码判断"安装成功"
+/// （启动器型安装程序如腾讯会议，派生真实安装进程后立即退出，退出码无意义，
+///  原实现会误报"安装完成"）。改为轮询注册表 Uninstall 项，目标软件出现即
+/// 确认安装成功；超时（5 分钟）未出现则返回 "unknown"，前端提示"未能确认"。
 #[tauri::command]
 async fn download_and_install_software(
     _app: tauri::AppHandle,
     download_url: String,
-) -> Result<String, String> {
+) -> Result<InstallResult, String> {
     #[cfg(target_os = "macos")]
     {
         let _ = &download_url;
@@ -3188,6 +3372,7 @@ async fn download_and_install_software(
             .to_string();
         let save_path = tmp_dir.join(format!("aidi-software-{}", file_name));
 
+        // 下载（async，不阻塞运行时）
         let resp = reqwest::get(&download_url)
             .await
             .map_err(|e| format!("下载失败: {}", e))?;
@@ -3197,32 +3382,71 @@ async fn download_and_install_software(
         std::fs::write(&save_path, &bytes)
             .map_err(|e| format!("写入文件失败: {}", e))?;
 
-        // 启动安装包并等待安装完成
-        let mut child = std::process::Command::new(&save_path)
-            .spawn()
-            .map_err(|e| {
-                // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
-                if e.raw_os_error() == Some(740) {
-                    "安装需要管理员权限，UAC 被拒绝或未弹出，请右键安装包以管理员身份运行".to_string()
-                } else {
-                    format!("打开安装包失败: {}", e)
+        // 启动安装包 + 等待 + 轮询注册表全部是阻塞操作，
+        // 放入 spawn_blocking 避免阻塞 tokio 异步运行时。
+        let download_url_for_poll = download_url.clone();
+        let result = tokio::task::spawn_blocking(move || -> Result<InstallResult, String> {
+            // 启动安装包
+            let mut child = std::process::Command::new(&save_path)
+                .spawn()
+                .map_err(|e| {
+                    // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
+                    if e.raw_os_error() == Some(740) {
+                        "安装需要管理员权限，UAC 被拒绝或未弹出，请右键安装包以管理员身份运行".to_string()
+                    } else {
+                        format!("打开安装包失败: {}", e)
+                    }
+                })?;
+
+            // 等待启动的进程退出。
+            // 单进程安装程序：阻塞到用户完成或取消；
+            // 启动器型安装程序：派生真实安装进程后立即退出，wait 很快返回。
+            // 注意：不再使用退出码判断成功——启动器型退出码无意义，且部分安装程序
+            // 用户取消时退出码也是 0。改为下面的注册表轮询确认。
+            let _exit_status = child.wait()
+                .map_err(|e| format!("等待安装程序退出失败: {}", e))?;
+
+            let save_path_str = save_path.to_string_lossy().to_string();
+            let display_names = lookup_display_names(&download_url_for_poll);
+
+            // 无检测映射：无法轮询确认，直接返回 unknown
+            let Some(names) = display_names else {
+                return Ok(InstallResult {
+                    save_path: save_path_str,
+                    final_status: "unknown".to_string(),
+                    version: None,
+                    display_name: None,
+                });
+            };
+
+            // 轮询注册表，最长 5 分钟。目标软件 Uninstall 条目出现即确认安装成功。
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            loop {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(InstallResult {
+                        save_path: save_path_str,
+                        final_status: "unknown".to_string(),
+                        version: None,
+                        display_name: None,
+                    });
                 }
-            })?;
+                for name in names {
+                    if let Some((dn, ver)) = check_installed_via_powershell(name) {
+                        return Ok(InstallResult {
+                            save_path: save_path_str,
+                            final_status: "installed".to_string(),
+                            version: if ver.is_empty() { None } else { Some(ver) },
+                            display_name: Some(dn),
+                        });
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        })
+        .await
+        .map_err(|e| format!("安装任务执行失败: {}", e))?;
 
-        // 等待安装程序退出（阻塞直到用户完成或取消安装）
-        let exit_status = child.wait()
-            .map_err(|e| format!("等待安装程序退出失败: {}", e))?;
-
-        let exit_code = exit_status.code().unwrap_or(-1);
-        if exit_status.success() {
-            Ok(save_path.to_string_lossy().to_string())
-        } else {
-            Err(format!(
-                "安装未完成（退出码: {}），安装包已保存到: {}",
-                exit_code,
-                save_path.to_string_lossy()
-            ))
-        }
+        result
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -4349,6 +4573,7 @@ pub fn run() {
             check_update,
             download_and_install_update,
             download_and_install_software,
+            check_software_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
