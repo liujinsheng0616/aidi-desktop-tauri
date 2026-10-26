@@ -7,8 +7,8 @@ page_size=$(pagesize)
 vm_before=$(vm_stat | grep "Pages free" | awk '{print $3}' | tr -d '.')
 free_before=$((vm_before * page_size))
 
-# Get top 5 processes by memory before optimization
-top_procs_before=$(ps -eo pid,rss,comm -r | head -6 | tail -5)
+# Get top 10 processes by memory before optimization
+top_procs_before=$(ps -eo pid,rss,comm -m | head -11 | tail -10)
 
 sync
 
