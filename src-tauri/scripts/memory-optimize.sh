@@ -14,17 +14,28 @@ sync
 
 # Try purge: first without sudo, then with AppleScript admin privileges
 purge_ok=false
+error_reason=""
 if command -v purge &> /dev/null; then
     purge 2>/dev/null
     if [ $? -eq 0 ]; then
         purge_ok=true
     else
         # Try with admin privileges via AppleScript (will prompt for password)
-        osascript -e 'do shell script "purge" with administrator privileges' 2>/dev/null
-        if [ $? -eq 0 ]; then
+        # Capture exit code: -128 = user cancelled the password dialog
+        osascript -e 'do shell script "purge" with administrator privileges' >/dev/null 2>&1
+        osa_status=$?
+        if [ $osa_status -eq 0 ]; then
             purge_ok=true
+        elif [ $osa_status -eq 128 ] || [ $osa_status -eq -128 ]; then
+            # -128 in shell becomes 128; user clicked "Cancel" on the password dialog
+            error_reason="user_cancelled"
+        else
+            # Wrong password or other auth failure
+            error_reason="permission_denied"
         fi
     fi
+else
+    error_reason="purge_not_found"
 fi
 
 # Wait for memory to be freed
@@ -79,6 +90,13 @@ while IFS= read -r line_before; do
     proc_count=$((proc_count + 1))
 done <<< "$top_procs_before"
 
+# Build errorReason JSON value: null when empty, quoted string otherwise
+if [ -n "$error_reason" ]; then
+    error_reason_json="\"$error_reason\""
+else
+    error_reason_json="null"
+fi
+
 cat << EOF
 {
   "success": $purge_ok,
@@ -89,6 +107,7 @@ cat << EOF
   "freeMemoryAfter": $free_after,
   "freeMemoryBeforeMB": $free_before_mb,
   "freeMemoryAfterMB": $free_after_mb,
+  "errorReason": $error_reason_json,
   "details": [$details]
 }
 EOF

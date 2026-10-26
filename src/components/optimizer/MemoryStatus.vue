@@ -22,8 +22,16 @@ const optimizeResult = ref<{
   freedMB: number
   processesOptimized: number
   success: boolean
+  errorReason?: 'user_cancelled' | 'permission_denied' | 'purge_not_found' | null
   details?: { name: string; pid: number; freedMB: number; beforeMB: number; afterMB: number }[]
 } | null>(null)
+
+// Map script errorReason to a user-facing message (macOS only; Windows always succeeds)
+const errorMessageMap: Record<string, string> = {
+  user_cancelled: '已取消密码输入，未释放内存',
+  permission_denied: '密码错误或权限被拒，无法释放内存',
+  purge_not_found: '系统缺少 purge 命令，无法优化',
+}
 
 async function handleOptimize() {
   isOptimizing.value = true
@@ -88,7 +96,12 @@ async function handleOptimize() {
 
     <div v-if="optimizeResult" class="space-y-2">
       <div :class="['text-xs p-2 rounded', optimizeResult.success ? 'text-green-600 bg-green-50' : 'text-orange-600 bg-orange-50']">
-        已释放 {{ optimizeResult.freedMB }} MB 内存{{ optimizeResult.processesOptimized ? `，优化 ${optimizeResult.processesOptimized} 个进程` : '' }}
+        <template v-if="optimizeResult.success">
+          已释放 {{ optimizeResult.freedMB }} MB 内存{{ optimizeResult.processesOptimized ? `，优化 ${optimizeResult.processesOptimized} 个进程` : '' }}
+        </template>
+        <template v-else>
+          {{ optimizeResult.errorReason ? errorMessageMap[optimizeResult.errorReason] : '优化失败，未知原因' }}
+        </template>
       </div>
       <div v-if="optimizeResult.details && optimizeResult.details.length > 0" class="border rounded">
         <div class="text-xs font-medium p-2 bg-muted/50 border-b">进程内存释放明细</div>
