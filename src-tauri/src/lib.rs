@@ -117,11 +117,12 @@ mod hotkey {
                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                 sync_toggle_menu_item(app, false);
             } else {
-                // 先设置回球尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
+                // 先设置回收起态尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
+                // 收起态宽度 99px（与 collapse_input_window 一致），高度 = ballSize + padding*2
                 let ball_size_val = *BALL_SIZE.lock().unwrap();
                 let full_size = ball_size_val + BALL_PADDING * 2;
                 let _ = window.set_size(Size::Logical(tauri::LogicalSize {
-                    width: full_size as f64,
+                    width: 99.0,
                     height: full_size as f64,
                 }));
                 // 兜底：再次通知前端收起，防止上次 emit 在窗口隐藏后丢失
@@ -221,11 +222,12 @@ fn register_hotkey_windows(app: AppHandle) {
                                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, false);
                             } else {
-                                // 先设置回球尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
+                                // 先设置回收起态尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
+                                // 收起态宽度 99px（与 collapse_input_window 一致），高度 = ballSize + padding*2
                                 let ball_size_val = *BALL_SIZE.lock().unwrap();
                                 let full_size = ball_size_val + BALL_PADDING * 2;
                                 let _ = window.set_size(Size::Logical(tauri::LogicalSize {
-                                    width: full_size as f64,
+                                    width: 99.0,
                                     height: full_size as f64,
                                 }));
                                 // 兜底：再次通知前端收起，防止上次 emit 在窗口隐藏后丢失
