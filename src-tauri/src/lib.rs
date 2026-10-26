@@ -117,6 +117,17 @@ mod hotkey {
                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                 sync_toggle_menu_item(app, false);
             } else {
+                // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
+                let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+                if was_flipped {
+                    let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+                    let cur_y = window.outer_position().map(|p| p.y).unwrap_or(0);
+                    let _ = window.set_position(Position::Physical(PhysicalPosition {
+                        x: restore_x,
+                        y: cur_y,
+                    }));
+                    let _ = app.emit("input-expanded-flip", false);
+                }
                 // 先设置回收起态尺寸，再通知前端收起，等前端处理完再 show
                 // 否则 Vue 来不及处理收起事件，窗口已显示，用户看到展开态闪一下
                 let ball_size_val = *BALL_SIZE.lock().unwrap();
@@ -227,6 +238,17 @@ fn register_hotkey_windows(app: AppHandle) {
                                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, false);
                             } else {
+                                // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
+                                let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+                                if was_flipped {
+                                    let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+                                    let cur_y = window.outer_position().map(|p| p.y).unwrap_or(0);
+                                    let _ = window.set_position(Position::Physical(PhysicalPosition {
+                                        x: restore_x,
+                                        y: cur_y,
+                                    }));
+                                    let _ = app.emit("input-expanded-flip", false);
+                                }
                                 // 先设置回收起态尺寸，再通知前端收起，等前端处理完再 show
                                 // 否则 Vue 来不及处理收起事件，窗口已显示，用户看到展开态闪一下
                                 let ball_size_val = *BALL_SIZE.lock().unwrap();
@@ -1135,6 +1157,19 @@ fn animate_to_position(
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
+    // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
+    let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+    if was_flipped {
+        if let Some(w) = app.get_webview_window("main") {
+            let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+            let cur_y = w.outer_position().map(|p| p.y).unwrap_or(0);
+            let _ = w.set_position(Position::Physical(PhysicalPosition {
+                x: restore_x,
+                y: cur_y,
+            }));
+        }
+        let _ = app.emit("input-expanded-flip", false);
+    }
     // show 之前确保窗口尺寸正确，避免 Windows 上 hide 状态下 set_size 不生效导致内容被截断
     if let Some(w) = app.get_webview_window("main") {
         let ball_size_val = *BALL_SIZE.lock().unwrap();
@@ -1290,6 +1325,11 @@ fn prepare_drag(app: tauri::AppHandle) -> (i32, i32) {
         if let Ok(pos) = w.outer_position() {
             DRAG_WINDOW_X.store(pos.x, Ordering::SeqCst);
             DRAG_WINDOW_Y.store(pos.y, Ordering::SeqCst);
+            // 如果当前处于展开翻转状态，更新 PRE_EXPAND_X 为当前位置，
+            // 防止拖拽后收起输入框时恢复到过期的旧位置
+            if INPUT_EXPANDED_FLIPPED.load(Ordering::SeqCst) {
+                PRE_EXPAND_X.store(pos.x, Ordering::SeqCst);
+            }
             (pos.x, pos.y)
         } else {
             (DRAG_WINDOW_X.load(Ordering::SeqCst), DRAG_WINDOW_Y.load(Ordering::SeqCst))
@@ -1584,6 +1624,13 @@ fn scroll_ball(_app: tauri::AppHandle, _delta_y: i32) {
 static DRAG_WINDOW_X: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_Y: AtomicI32 = AtomicI32::new(0);
 
+// Track whether the expanded input window was shifted left (flipped) to avoid
+// the expanded input extending past the right screen edge.
+static INPUT_EXPANDED_FLIPPED: AtomicBool = AtomicBool::new(false);
+// Original window X position (physical pixels) before expand shifted it left.
+// Used by collapse_input_window to restore the ball's original position.
+static PRE_EXPAND_X: AtomicI32 = AtomicI32::new(0);
+
 #[tauri::command]
 fn start_drag(window: tauri::Window) {
     if let Ok(pos) = window.outer_position() {
@@ -1644,7 +1691,7 @@ fn move_window_to(app: tauri::AppHandle, x: i32, y: i32) {
 }
 
 #[tauri::command]
-fn drag_end(_app: tauri::AppHandle) {
+fn drag_end(app: tauri::AppHandle) {
     // 移除边缘吸附效果 - 仅重置交互状态
     let mut state = DOCK_STATE.lock().unwrap();
     state.is_docked = false;
@@ -1653,6 +1700,13 @@ fn drag_end(_app: tauri::AppHandle) {
     state.is_in_pop_protection = false;
     state.interaction_state = InteractionState::Idle;
     drop(state);
+
+    // 如果展开输入框时窗口被左移（翻转到右侧布局），清除翻转状态，
+    // 防止收起时恢复到拖拽前的旧位置
+    let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+    if was_flipped {
+        let _ = app.emit("input-expanded-flip", false);
+    }
 
     // 取消任何待处理的动画和弹出保护定时器
     next_state_version();
@@ -3194,6 +3248,19 @@ async fn trigger_report(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn update_window_size(app: tauri::AppHandle, size: u32) {
     if let Some(main_window) = app.webview_windows().get("main") {
+        // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置并清除翻转状态，
+        // 否则下方基于 old_size（展开态 463px）的位置计算会出错
+        let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+        if was_flipped {
+            let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+            let cur_y = main_window.outer_position().map(|p| p.y).unwrap_or(0);
+            let _ = main_window.set_position(Position::Physical(PhysicalPosition {
+                x: restore_x,
+                y: cur_y,
+            }));
+            let _ = app.emit("input-expanded-flip", false);
+        }
+
         // 确保最小尺寸，外环需要 ballSize + 8，再加两边 padding
         let actual_size = size.max(30);
 
@@ -3261,10 +3328,41 @@ fn expand_input_window(app: tauri::AppHandle) {
         let window_width = 463u32;
         // 展开态高度：ballSize + padding*2
         let window_height = ball_size + BALL_PADDING * 2;
+
+        // 记录展开前的窗口 x（物理像素），用于收起时恢复
+        let original_x = main_window.outer_position().map(|p| p.x).unwrap_or(0);
+        PRE_EXPAND_X.store(original_x, Ordering::SeqCst);
+
+        // 检测展开后是否超出屏幕右边缘；若超出则向左平移窗口（右边缘对齐屏幕右边缘）
+        let scale = main_window.scale_factor().unwrap_or(1.0);
+        let expanded_width_phys = (window_width as f64 * scale) as i32;
+        let mut flipped = false;
+
+        if let Some(monitor) = main_window.current_monitor().ok().flatten() {
+            let screen_origin = monitor.position();
+            let screen_size = monitor.size();
+            let screen_right = screen_origin.x + screen_size.width as i32;
+            let expanded_right = original_x + expanded_width_phys;
+            if expanded_right > screen_right {
+                // 向左平移：展开后的窗口右边缘对齐屏幕右边缘
+                let new_x = screen_right - expanded_width_phys;
+                let _ = main_window.set_position(Position::Physical(PhysicalPosition {
+                    x: new_x,
+                    y: main_window.outer_position().map(|p| p.y).unwrap_or(0),
+                }));
+                flipped = true;
+            }
+        }
+
+        INPUT_EXPANDED_FLIPPED.store(flipped, Ordering::SeqCst);
+
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
             width: window_width as f64,
             height: window_height as f64,
         }));
+
+        // 通知前端翻转布局（球在右、输入框在左），防止输入框超出屏幕被裁剪
+        let _ = app.emit("input-expanded-flip", flipped);
 
         // 窗口大小改变后，更新聊天窗口位置
         update_chat_window_position(app.clone());
@@ -3276,10 +3374,23 @@ fn expand_input_window(app: tauri::AppHandle) {
 fn collapse_input_window(app: tauri::AppHandle) {
     if let Some(main_window) = app.webview_windows().get("main") {
         let ball_size = *BALL_SIZE.lock().unwrap();
-        // 收起态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 边框 2 = 99px
-        // 硬编码以避免 ball_size 获取不正确导致的问题
+        // 收起态宽度：浮动球 60 + 分割线 1 + 搜索按钮 36 + 边框 2 = 99px 硬编码以避免 ball_size 获取不正确导致的问题
         let window_width = 99u32;
         let window_height = ball_size + BALL_PADDING * 2;
+
+        // 如果展开时窗口被左移（翻转到右侧布局），恢复到展开前的原始位置
+        let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+        if was_flipped {
+            let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+            let cur_y = main_window.outer_position().map(|p| p.y).unwrap_or(0);
+            let _ = main_window.set_position(Position::Physical(PhysicalPosition {
+                x: restore_x,
+                y: cur_y,
+            }));
+            // 通知前端恢复正常布局（球在左、输入框在右）
+            let _ = app.emit("input-expanded-flip", false);
+        }
+
         let _ = main_window.set_size(Size::Logical(tauri::LogicalSize {
             width: window_width as f64,
             height: window_height as f64,
@@ -3799,6 +3910,17 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // 第二个实例启动时，把已有主窗口显示并聚焦
             if let Some(window) = app.webview_windows().get("main") {
+                // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
+                let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+                if was_flipped {
+                    let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+                    let cur_y = window.outer_position().map(|p| p.y).unwrap_or(0);
+                    let _ = window.set_position(Position::Physical(PhysicalPosition {
+                        x: restore_x,
+                        y: cur_y,
+                    }));
+                    let _ = app.emit("input-expanded-flip", false);
+                }
                 // show 之前确保窗口尺寸正确，避免尺寸不对导致悬浮球变形
                 let ball_size_val = *BALL_SIZE.lock().unwrap();
                 let window_width = ball_size_val + 1 + 36 + 2;
@@ -3927,6 +4049,17 @@ pub fn run() {
                                             BALL_VISIBLE.store(false, Ordering::SeqCst);
                                             sync_toggle_menu_item(&app, false);
                                         } else {
+                                            // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
+                                            let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+                                            if was_flipped {
+                                                let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+                                                let cur_y = w.outer_position().map(|p| p.y).unwrap_or(0);
+                                                let _ = w.set_position(Position::Physical(PhysicalPosition {
+                                                    x: restore_x,
+                                                    y: cur_y,
+                                                }));
+                                                let _ = app.emit("input-expanded-flip", false);
+                                            }
                                             let _ = w.show();
                                             BALL_VISIBLE.store(true, Ordering::SeqCst);
                                             sync_toggle_menu_item(&app, true);
@@ -4227,6 +4360,17 @@ pub fn run() {
                     let is_logged_in = IS_LOGGED_IN.load(Ordering::SeqCst);
                     if is_logged_in {
                         if let Some(main_window) = app.webview_windows().get("main") {
+                            // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
+                            let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
+                            if was_flipped {
+                                let restore_x = PRE_EXPAND_X.load(Ordering::SeqCst);
+                                let cur_y = main_window.outer_position().map(|p| p.y).unwrap_or(0);
+                                let _ = main_window.set_position(Position::Physical(PhysicalPosition {
+                                    x: restore_x,
+                                    y: cur_y,
+                                }));
+                                let _ = app.emit("input-expanded-flip", false);
+                            }
                             let _ = main_window.show();
                             BALL_VISIBLE.store(true, Ordering::SeqCst);
                             let ball_size_val = *BALL_SIZE.lock().unwrap();
