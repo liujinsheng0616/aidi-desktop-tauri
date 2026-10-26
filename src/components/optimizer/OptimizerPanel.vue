@@ -13,12 +13,6 @@ import SystemInfo from './SystemInfo.vue'
 import { useOptimizer } from '@/stores/optimizer'
 import { listen } from '@tauri-apps/api/event'
 
-// Platform detection
-const nav = navigator as any
-const isWin = nav.userAgentData
-  ? nav.userAgentData.platform === 'Windows'
-  : navigator.platform.startsWith('Win')
-
 const {
   isScanning,
   scanProgress,
@@ -188,9 +182,9 @@ onUnmounted(() => {
             <DiskClean v-if="diskResult.details" :details="diskResult.details" />
           </StatusCard>
 
-          <!-- Memory (Windows only) -->
+          <!-- Memory -->
           <StatusCard
-            v-if="isWin && memoryResult"
+            v-if="memoryResult"
             icon="🧠"
             title="内存状态"
             :status="memoryResult.status"
@@ -212,9 +206,9 @@ onUnmounted(() => {
             <StartupManager v-if="startupResult.details" :details="startupResult.details" />
           </StatusCard>
 
-          <!-- Disk Health (Windows only) -->
+          <!-- Disk Health -->
           <StatusCard
-            v-if="isWin && healthResult"
+            v-if="healthResult"
             icon="💿"
             title="磁盘健康"
             :status="healthResult.status"

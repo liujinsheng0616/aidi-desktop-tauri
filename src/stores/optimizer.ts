@@ -170,23 +170,14 @@ const isMac = ref(false)
 const p = platform()
 isMac.value = p === 'macos'
 
-// Platform-specific scan steps
-// macOS: 磁盘清理、启动项管理、系统信息
-// Windows: 全部5项
-const scanSteps = computed(() => isMac.value
-  ? [
-      { key: 'disk', label: '磁盘清理' },
-      { key: 'startup', label: '启动项' },
-      { key: 'system', label: '系统信息' },
-    ]
-  : [
-      { key: 'disk', label: '磁盘清理' },
-      { key: 'memory', label: '内存状态' },
-      { key: 'startup', label: '启动项' },
-      { key: 'health', label: '磁盘健康' },
-      { key: 'system', label: '系统信息' },
-    ]
-)
+// Scan steps — macOS 和 Windows 均支持全部5项
+const scanSteps = computed(() => [
+  { key: 'disk', label: '磁盘清理' },
+  { key: 'memory', label: '内存状态' },
+  { key: 'startup', label: '启动项' },
+  { key: 'health', label: '磁盘健康' },
+  { key: 'system', label: '系统信息' },
+])
 
 // Computed
 const diskResult = computed(() => results.value.find(r => r.dimension === 'disk'))
