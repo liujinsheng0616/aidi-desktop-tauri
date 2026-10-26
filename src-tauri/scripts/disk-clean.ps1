@@ -82,8 +82,10 @@ if (Contains-Category "systemTemp") {
                 if ($deleted) {
                     $results.cleaned += $itemSize
                     $results.successCount++
+                    Add-Detail "systemTemp" $_.Name $itemSize "success" ""
                 } else {
                     $results.failedCount++
+                    Add-Detail "systemTemp" $_.Name $itemSize "failed" "File in use"
                 }
             } catch { }
         }
@@ -101,8 +103,10 @@ if (Contains-Category "prefetch") {
                 if ($deleted) {
                     $results.cleaned += $itemSize
                     $results.successCount++
+                    Add-Detail "prefetch" $_.Name $itemSize "success" ""
                 } else {
                     $results.failedCount++
+                    Add-Detail "prefetch" $_.Name $itemSize "failed" "File in use"
                 }
             } catch { }
         }
