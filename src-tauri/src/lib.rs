@@ -117,20 +117,25 @@ mod hotkey {
                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                 sync_toggle_menu_item(app, false);
             } else {
-                // 先设置回收起态尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
-                // 收起态宽度 99px（与 collapse_input_window 一致），高度 = ballSize + padding*2
+                // 先设置回收起态尺寸，再通知前端收起，等前端处理完再 show
+                // 否则 Vue 来不及处理收起事件，窗口已显示，用户看到展开态闪一下
                 let ball_size_val = *BALL_SIZE.lock().unwrap();
                 let full_size = ball_size_val + BALL_PADDING * 2;
                 let _ = window.set_size(Size::Logical(tauri::LogicalSize {
                     width: 99.0,
                     height: full_size as f64,
                 }));
-                // 兜底：再次通知前端收起，防止上次 emit 在窗口隐藏后丢失
                 let _ = window.emit("ball-toggled-hidden", ());
-                let _ = window.show();
-                BALL_VISIBLE.store(true, Ordering::SeqCst);
-                sync_toggle_menu_item(app, true);
-                apply_circular_window_mask(window, full_size, "shortcut_toggle");
+                let app_clone = app.clone();
+                let window_clone = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    // 等待前端 Vue 处理完收起事件（nextTick + 一点余量）
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    let _ = window_clone.show();
+                    BALL_VISIBLE.store(true, Ordering::SeqCst);
+                    sync_toggle_menu_item(&app_clone, true);
+                    apply_circular_window_mask(&window_clone, full_size, "shortcut_toggle");
+                });
             }
         }
     }
@@ -222,20 +227,24 @@ fn register_hotkey_windows(app: AppHandle) {
                                 BALL_VISIBLE.store(false, Ordering::SeqCst);
                                 sync_toggle_menu_item(&app, false);
                             } else {
-                                // 先设置回收起态尺寸再 show，避免展开态隐藏后再次显示时闪一下大窗口
-                                // 收起态宽度 99px（与 collapse_input_window 一致），高度 = ballSize + padding*2
+                                // 先设置回收起态尺寸，再通知前端收起，等前端处理完再 show
+                                // 否则 Vue 来不及处理收起事件，窗口已显示，用户看到展开态闪一下
                                 let ball_size_val = *BALL_SIZE.lock().unwrap();
                                 let full_size = ball_size_val + BALL_PADDING * 2;
                                 let _ = window.set_size(Size::Logical(tauri::LogicalSize {
                                     width: 99.0,
                                     height: full_size as f64,
                                 }));
-                                // 兜底：再次通知前端收起，防止上次 emit 在窗口隐藏后丢失
                                 let _ = window.emit("ball-toggled-hidden", ());
-                                let _ = window.show();
-                                BALL_VISIBLE.store(true, Ordering::SeqCst);
-                                sync_toggle_menu_item(&app, true);
-                                apply_circular_window_mask(window, full_size, "shortcut_toggle");
+                                let app_clone = app.clone();
+                                let window_clone = window.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    std::thread::sleep(std::time::Duration::from_millis(50));
+                                    let _ = window_clone.show();
+                                    BALL_VISIBLE.store(true, Ordering::SeqCst);
+                                    sync_toggle_menu_item(&app_clone, true);
+                                    apply_circular_window_mask(&window_clone, full_size, "shortcut_toggle");
+                                });
                             }
                         }
                     }
