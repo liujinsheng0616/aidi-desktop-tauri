@@ -76,7 +76,7 @@ function getHealthStatusText(healthStatus: string) {
           :key="disk.name"
           class="flex items-center justify-between text-xs"
         >
-          <span class="truncate max-w-[200px]" :title="disk.name">{{ disk.name }}</span>
+          <span class="break-all max-w-[200px]" :title="disk.name">{{ disk.name }}</span>
           <span class="text-muted-foreground">
             {{ getMediaTypeText(disk.mediaType) }} | {{ disk.sizeGB }} GB | {{ getHealthStatusText(disk.healthStatus) }}
           </span>

@@ -65,7 +65,7 @@ const sections = [
           class="flex justify-between text-xs"
         >
           <span class="text-muted-foreground">{{ item.label }}</span>
-          <span class="text-right truncate max-w-[180px]" :title="item.value()">
+          <span class="text-right break-all max-w-[180px]" :title="item.value()">
             {{ item.value() || '-' }}
           </span>
         </div>

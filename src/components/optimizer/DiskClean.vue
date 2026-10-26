@@ -277,10 +277,10 @@ async function handleClean() {
           :class="detail.status === 'failed' ? 'bg-red-50 dark:bg-red-900/10' : ''"
         >
           <div class="flex-1 min-w-0">
-            <div class="truncate text-muted-foreground" :title="detail.path">
-              {{ detail.path.split('/').pop() }}
+            <div class="text-muted-foreground break-all" :title="detail.path">
+              {{ detail.path.includes('/') ? detail.path.split('/').pop() : detail.path.includes('\\') ? detail.path.split('\\').pop() : detail.path }}
             </div>
-            <div v-if="detail.status === 'failed'" class="text-red-500 text-[10px]">
+            <div v-if="detail.status === 'failed' && detail.reason" class="text-red-500 text-[10px] break-all">
               {{ detail.reason }}
             </div>
           </div>

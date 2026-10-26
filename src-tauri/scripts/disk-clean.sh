@@ -30,8 +30,8 @@ add_detail() {
     fi
     details_count=$((details_count + 1))
 
-    # Escape path for JSON
-    escaped_path=$(echo "$path" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Escape path for JSON (backslash, quote, and control chars)
+    escaped_path=$(printf '%s' "$path" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n\t\r')
 
     if [ "$details_json" = "[]" ]; then
         details_json="[{\"category\":\"$category\",\"path\":\"$escaped_path\",\"size\":$size,\"status\":\"$status\",\"reason\":\"$reason\"}]"
@@ -195,9 +195,7 @@ if contains "recycleBin"; then
                 while IFS=$'\t' read -r fname fsize; do
                     [ -z "$fname" ] && continue
                     fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
-                    if [ "$fsize" -gt 0 ]; then
-                        add_detail "recycleBin" "$fname" "$fsize" "success" ""
-                    fi
+                    add_detail "recycleBin" "$fname" "$fsize" "success" ""
                 done <<< "$trash_items"
             else
                 failed_count=$((failed_count + trash_count_before))
@@ -234,7 +232,7 @@ fi
 
 # Calculate MB with proper formatting (ensure leading zero)
 if [ $cleaned -eq 0 ]; then
-    cleaned_mb="0"
+    cleaned_mb=0
 else
     cleaned_mb=$(awk "BEGIN {printf \"%.2f\", $cleaned / 1048576}")
 fi

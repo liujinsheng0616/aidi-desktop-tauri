@@ -103,7 +103,7 @@ function getSourceLabel(source: string) {
       >
         <span class="flex items-center gap-2 flex-1 min-w-0">
           <span>🚀</span>
-          <span class="truncate" :title="item.name">{{ item.name }}</span>
+          <span class="break-all" :title="item.name">{{ item.name }}</span>
         </span>
         <div class="flex items-center gap-2">
           <span class="text-muted-foreground">{{ getSourceLabel(item.source) }}</span>

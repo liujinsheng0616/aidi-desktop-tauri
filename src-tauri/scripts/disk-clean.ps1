@@ -22,7 +22,7 @@ try {
 function Contains-Category($name) { return $categories -contains $name }
 
 function Add-Detail($category, $path, $size, $status, $reason) {
-    if ($results.details.Count -lt 50) {
+    if ($results.details.Count -lt 100) {
         $results.details += @{ category = $category; path = $path; size = $size; status = $status; reason = $reason }
     }
 }
@@ -196,9 +196,7 @@ if (Contains-Category "recycleBin") {
                 $results.successCount += $actualCleared
                 # 逐个文件添加明细
                 foreach ($ri in $recycleItems) {
-                    if ($ri.size -gt 0) {
-                        Add-Detail "recycleBin" $ri.name $ri.size "success" ""
-                    }
+                    Add-Detail "recycleBin" $ri.name $ri.size "success" ""
                 }
             } else {
                 $results.failedCount += $itemCountBefore
@@ -312,13 +310,13 @@ if (Contains-Category "browserCache") {
     }
 }
 
-# Output
+# Output — force details to always be an array (ConvertTo-Json quirk: 1-element arrays become objects)
 $cleanedMB = [math]::Round($results.cleaned / 1MB, 2)
 $output = @{
     cleaned = $results.cleaned
     cleanedMB = $cleanedMB
     successCount = $results.successCount
     failedCount = $results.failedCount
-    details = $results.details
+    details = @($results.details)
 }
 $output | ConvertTo-Json -Depth 3 -Compress
