@@ -4031,8 +4031,12 @@ pub fn run() {
                                         let full_size = ball_size_val + BALL_PADDING * 2;
                                         apply_circular_window_mask(&w, full_size, "timeout_fallback");
                                     } else {
-                                        // 未登录：触发前端登录检查流程
-                                        let _ = w.emit("request-login-check", ());
+                                        // 未登录：直接显示登录窗口
+                                        // 不依赖前端 request-login-check 事件（WebView 可能还没初始化，事件会丢失）
+                                        let app_clone = app_handle_timeout.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            show_login_window(app_clone).await;
+                                        });
                                     }
                                 }
                             }
