@@ -174,7 +174,7 @@ onUnmounted(() => {
             <DiskClean v-if="diskResult.details" :details="diskResult.details" />
           </StatusCard>
 
-          <!-- Memory (Windows only) -->
+          <!-- Memory -->
           <StatusCard
             v-if="memoryResult"
             icon="🧠"
@@ -198,7 +198,7 @@ onUnmounted(() => {
             <StartupManager v-if="startupResult.details" :details="startupResult.details" />
           </StatusCard>
 
-          <!-- Disk Health (Windows only) -->
+          <!-- Disk Health -->
           <StatusCard
             v-if="healthResult"
             icon="💿"
