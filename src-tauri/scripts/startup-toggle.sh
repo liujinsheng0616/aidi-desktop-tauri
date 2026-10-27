@@ -15,7 +15,7 @@ message=""
 case "$source" in
     "LoginItems")
         if [ "$enabled" = "true" ]; then
-            message="Cannot re-enable login items via script"
+            message="无法通过脚本重新启用登录项，请前往「系统设置 → 通用 → 登录项」手动添加"
         else
             # Remove login item using sfltool (no AppleScript / Apple Events needed)
             sfltool remove com.apple.LSSharedFileList.SessionLoginItems "$name" 2>/dev/null

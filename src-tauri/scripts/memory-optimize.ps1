@@ -11,10 +11,10 @@ $ErrorActionPreference = "SilentlyContinue"
 $osBefore = Get-CimInstance Win32_OperatingSystem
 $freeMemoryBefore = $osBefore.FreePhysicalMemory * 1KB
 
-# Clear working sets of processes (soft memory release)
+# Call Windows API to empty working sets of processes
 $processesOptimized = 0
+$procDetails = @()
 
-# Call Windows API to empty working sets
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -28,12 +28,23 @@ public class MemoryOptimizer {
 }
 "@
 
-Get-Process | Where-Object { $_.WorkingSet64 -gt 50MB } | ForEach-Object {
+Get-Process | Where-Object { $_.WorkingSet64 -gt 50MB } | Sort-Object WorkingSet64 -Descending | Select-Object -First 10 | ForEach-Object {
     try {
         $handle = $_.Handle
+        $wsBefore = $_.WorkingSet64
         if ($handle) {
             [MemoryOptimizer]::EmptyWorkingSet($handle) | Out-Null
+            $wsAfter = $_.WorkingSet64
+            $freed = $wsBefore - $wsAfter
+            if ($freed -lt 0) { $freed = 0 }
             $processesOptimized++
+            $procDetails += @{
+                name = $_.Name
+                pid = $_.Id
+                freedMB = [math]::Round($freed / 1MB, 2)
+                beforeMB = [math]::Round($wsBefore / 1MB, 2)
+                afterMB = [math]::Round($wsAfter / 1MB, 2)
+            }
         }
     } catch {
         # Skip processes we can't access
@@ -52,6 +63,7 @@ $osAfter = Get-CimInstance Win32_OperatingSystem
 $freeMemoryAfter = $osAfter.FreePhysicalMemory * 1KB
 
 $freed = $freeMemoryAfter - $freeMemoryBefore
+if ($freed -lt 0) { $freed = 0 }
 
 $output = @{
     success = $true
@@ -62,6 +74,7 @@ $output = @{
     freeMemoryAfter = $freeMemoryAfter
     freeMemoryBeforeMB = [math]::Round($freeMemoryBefore / 1MB, 2)
     freeMemoryAfterMB = [math]::Round($freeMemoryAfter / 1MB, 2)
+    details = @($procDetails)
 }
 
-$output | ConvertTo-Json -Depth 2 -Compress
+$output | ConvertTo-Json -Depth 3 -Compress

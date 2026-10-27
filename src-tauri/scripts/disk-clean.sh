@@ -30,8 +30,8 @@ add_detail() {
     fi
     details_count=$((details_count + 1))
 
-    # Escape path for JSON
-    escaped_path=$(echo "$path" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Escape path for JSON (backslash, quote, and control chars)
+    escaped_path=$(printf '%s' "$path" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n\t\r')
 
     if [ "$details_json" = "[]" ]; then
         details_json="[{\"category\":\"$category\",\"path\":\"$escaped_path\",\"size\":$size,\"status\":\"$status\",\"reason\":\"$reason\"}]"
@@ -137,35 +137,39 @@ fi
 # 改用 AppleScript 调用 Finder 清空废纸篓（Finder 有系统级权限）
 if contains "recycleBin"; then
     if [ -d "$HOME/.Trash" ]; then
-        # 先用 AppleScript 获取清空前的大小
-        osascript_result=$(osascript -e '
+        # 用 AppleScript 获取清空前每个文件的名称和大小
+        trash_items=$(osascript -e '
         tell application "Finder"
-            set total to 0
-            set fileCount to 0
+            set output to ""
             set items_list to every item of trash
             repeat with f in items_list
                 try
-                    set total to total + (physical size of f)
-                    set fileCount to fileCount + 1
+                    set fname to name of f
+                    set fsize to (physical size of f) as string
+                    set output to output & fname & tab & fsize & linefeed
                 end try
             end repeat
-            return (total as string) & "," & (fileCount as string)
+            return output
         end tell' 2>/dev/null)
-        if [ -n "$osascript_result" ]; then
-            trash_size_before=$(echo "$osascript_result" | cut -d',' -f1 | awk '{printf "%.0f", $1}')
-            trash_count_before=$(echo "$osascript_result" | cut -d',' -f2 | tr -d ' ')
-        else
-            trash_size_before=0
-            trash_count_before=0
+
+        trash_size_before=0
+        trash_count_before=0
+        if [ -n "$trash_items" ]; then
+            while IFS=$'\t' read -r fname fsize; do
+                [ -z "$fname" ] && continue
+                fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
+                trash_size_before=$((trash_size_before + fsize))
+                trash_count_before=$((trash_count_before + 1))
+            done <<< "$trash_items"
         fi
 
-        if [ "$trash_size_before" -gt 0 ]; then
+        if [ "$trash_count_before" -gt 0 ]; then
             # 用 AppleScript 清空废纸篓
             osascript -e 'tell application "Finder" to empty trash' 2>/dev/null
             # 等待清空完成（empty trash 是异步的）
             sleep 2
 
-            # 检查清空后的大小
+            # 检查清空后剩余大小
             osascript_after=$(osascript -e '
             tell application "Finder"
                 set total to 0
@@ -186,11 +190,20 @@ if contains "recycleBin"; then
             actual_cleaned=$((trash_size_before - trash_size_after))
             if [ "$actual_cleaned" -gt 0 ]; then
                 cleaned=$((cleaned + actual_cleaned))
-                success_count=$((success_count + 1))
-                add_detail "recycleBin" "$HOME/.Trash" "$actual_cleaned" "success" ""
+                success_count=$((success_count + trash_count_before))
+                # 逐个文件添加明细
+                while IFS=$'\t' read -r fname fsize; do
+                    [ -z "$fname" ] && continue
+                    fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
+                    add_detail "recycleBin" "$fname" "$fsize" "success" ""
+                done <<< "$trash_items"
             else
-                failed_count=$((failed_count + 1))
-                add_detail "recycleBin" "$HOME/.Trash" "$trash_size_before" "failed" "清空废纸篓失败"
+                failed_count=$((failed_count + trash_count_before))
+                while IFS=$'\t' read -r fname fsize; do
+                    [ -z "$fname" ] && continue
+                    fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
+                    add_detail "recycleBin" "$fname" "$fsize" "failed" "清空废纸篓失败"
+                done <<< "$trash_items"
             fi
         fi
     fi
@@ -219,7 +232,7 @@ fi
 
 # Calculate MB with proper formatting (ensure leading zero)
 if [ $cleaned -eq 0 ]; then
-    cleaned_mb="0"
+    cleaned_mb=0
 else
     cleaned_mb=$(awk "BEGIN {printf \"%.2f\", $cleaned / 1048576}")
 fi

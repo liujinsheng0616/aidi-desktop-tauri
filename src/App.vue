@@ -13,6 +13,7 @@ const colorTheme = ref('cyan-purple')
 const initialized = ref(false)
 const inputBoxHeight = ref(60) // 输入框动态高度
 const isInputExpanded = ref(false) // 输入框展开状态
+const isFlipped = ref(false) // 球靠近右边缘时，展开输入框向左翻转
 
 // 胶囊容器高度（随输入框动态变化）
 const capsuleHeight = computed(() => {
@@ -32,6 +33,8 @@ const capsuleStyle = computed(() => {
   return {
     width: `${shellWidth.value}px`,
     height: `${h}px`,
+    // 球靠近右边缘展开时翻转布局：球在右、输入框在左
+    flexDirection: isFlipped.value ? ('row-reverse' as const) : ('row' as const),
     // 使用 9999px 确保任何宽高下都是完美椭圆，不会出现棱角
     borderRadius: '9999px',
     '--theme-primary': currentTheme.primary,
@@ -49,6 +52,8 @@ async function handleInputExpand(expanded: boolean) {
     shellWidth.value = 99
     // 等待 CSS 动画完成（200ms）后再收窄窗口
     setTimeout(() => invoke('collapse_input_window'), 200)
+    // 收起时复位翻转状态（后端也会 emit flip=false）
+    isFlipped.value = false
   }
 }
 
@@ -174,6 +179,11 @@ onMounted(async () => {
     await syncAuthToBackend()
   })
 
+  // 监听输入框展开翻转事件：球靠近右边缘时翻转布局
+  listen('input-expanded-flip', (event: any) => {
+    isFlipped.value = event.payload as boolean
+  })
+
   // 监听 Rust 超时线程的重新检查请求（处理 Windows 上 WebView2 慢初始化场景）
   listen('request-login-check', async () => {
     if (initialized.value) return  // 已初始化，跳过
@@ -202,6 +212,10 @@ onMounted(async () => {
       if (user && user.id) {
         localStorage.setItem('aidi-user', JSON.stringify(user))
       }
+    } else {
+      // auth.json 不存在或为空，清除 localStorage 残留（退出时清理的兜底）
+      localStorage.removeItem('aidi-user')
+      localStorage.removeItem('aidi-token')
     }
   } catch (e) {
     console.warn('读取登录信息失败:', e)

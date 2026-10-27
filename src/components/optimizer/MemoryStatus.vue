@@ -18,7 +18,20 @@ const includeInQuickOptimize = computed({
 })
 
 const isOptimizing = ref(false)
-const optimizeResult = ref<{ freedMB: number } | null>(null)
+const optimizeResult = ref<{
+  freedMB: number
+  processesOptimized: number
+  success: boolean
+  errorReason?: 'user_cancelled' | 'permission_denied' | 'purge_not_found' | null
+  details?: { name: string; pid: number; freedMB: number; beforeMB: number; afterMB: number }[]
+} | null>(null)
+
+// Map script errorReason to a user-facing message (macOS only; Windows always succeeds)
+const errorMessageMap: Record<string, string> = {
+  user_cancelled: '已取消密码输入，未释放内存',
+  permission_denied: '密码错误或权限被拒，无法释放内存',
+  purge_not_found: '系统缺少 purge 命令，无法优化',
+}
 
 async function handleOptimize() {
   isOptimizing.value = true
@@ -60,7 +73,7 @@ async function handleOptimize() {
         </TableHeader>
         <TableBody>
           <TableRow v-for="proc in details.topProcesses?.slice(0, 5)" :key="proc.pid">
-            <TableCell class="text-xs py-1">{{ proc.name }}</TableCell>
+            <TableCell class="text-xs py-1 break-all">{{ proc.name }}</TableCell>
             <TableCell class="text-xs py-1 text-right">{{ proc.memoryMB }} MB</TableCell>
           </TableRow>
         </TableBody>
@@ -81,8 +94,38 @@ async function handleOptimize() {
       </Button>
     </div>
 
-    <div v-if="optimizeResult" class="text-xs text-green-600 bg-green-50 p-2 rounded">
-      已释放 {{ optimizeResult.freedMB }} MB 内存
+    <div v-if="optimizeResult" class="space-y-2">
+      <div :class="['text-xs p-2 rounded', optimizeResult.success ? 'text-green-600 bg-green-50' : 'text-orange-600 bg-orange-50']">
+        <template v-if="optimizeResult.success">
+          已释放 {{ optimizeResult.freedMB }} MB 内存{{ optimizeResult.processesOptimized ? `，优化 ${optimizeResult.processesOptimized} 个进程` : '' }}
+        </template>
+        <template v-else>
+          {{ optimizeResult.errorReason ? errorMessageMap[optimizeResult.errorReason] : '优化失败，未知原因' }}
+        </template>
+      </div>
+      <div v-if="optimizeResult.details && optimizeResult.details.length > 0" class="border rounded">
+        <div class="text-xs font-medium p-2 bg-muted/50 border-b">进程内存释放明细</div>
+        <div class="max-h-40 overflow-y-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead class="text-xs h-8">进程名</TableHead>
+                <TableHead class="text-xs h-8 text-right">释放前</TableHead>
+                <TableHead class="text-xs h-8 text-right">释放后</TableHead>
+                <TableHead class="text-xs h-8 text-right">释放</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="proc in optimizeResult.details" :key="proc.pid">
+                <TableCell class="text-xs py-1 break-all">{{ proc.name }}</TableCell>
+                <TableCell class="text-xs py-1 text-right">{{ proc.beforeMB }} MB</TableCell>
+                <TableCell class="text-xs py-1 text-right">{{ proc.afterMB }} MB</TableCell>
+                <TableCell class="text-xs py-1 text-right text-green-600">{{ proc.freedMB }} MB</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </div>
     </div>
   </div>
 </template>

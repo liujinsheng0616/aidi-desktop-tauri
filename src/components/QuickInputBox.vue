@@ -33,6 +33,7 @@ let unlistenStreamEnd: UnlistenFn | null = null
 let unlistenStreamStart: UnlistenFn | null = null
 let unlistenQuickScreenshot: UnlistenFn | null = null
 let unlistenScreenshotPermission: UnlistenFn | null = null
+let unlistenBallToggled: UnlistenFn | null = null
 
 const ballSize = computed(() => props.size || 60)
 
@@ -88,9 +89,8 @@ function toggleInput() {
           inputRef.value.style.overflowY = textareaActualHeight >= 140 ? 'auto' : 'hidden'
         }
         emit('heightChange', textareaHeight.value)
-      } else {
-        // 无论有无文字，都调用 autoResize 确保 textarea 高度正确
-        // 否则 textarea 保持 height:auto，浏览器默认 padding 会导致渲染偏高
+      } else if (inputText.value) {
+        // 没有保存高度但有内容时，重新计算
         autoResize()
       }
     }, 50)
@@ -175,9 +175,13 @@ function autoResize() {
 // 移除截图预览（按索引删除单张）
 function removeScreenshot(index: number) {
   pendingScreenshots.value.splice(index, 1)
-  if (pendingScreenshots.value.length === 0) {
-    invoke('clear_pending_screenshot').catch(() => {})
-  }
+  // 同步后端缓存：先清空，再把剩余的重新存入
+  // 否则 get_pending_screenshot 会取到已删除的图
+  invoke('clear_pending_screenshot').then(() => {
+    pendingScreenshots.value.forEach(url => {
+      invoke('store_pending_screenshot', { dataUrl: url }).catch(() => {})
+    })
+  }).catch(() => {})
   // 截图行变化后重算容器高度
   nextTick(() => autoResize())
 }
@@ -233,6 +237,51 @@ function stopMessage() {
   emitTauriEvent('stop-chat-stream').catch(() => {})
 }
 
+// 粘贴图片处理（Cmd+V / Ctrl+V 系统截图工具截取的图片）
+async function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+
+  // 先同步扫描所有 item，只要有图片就立即 preventDefault，
+  // 避免 await 期间浏览器执行默认粘贴（把文本/HTML 插入 textarea）
+  const imageBlobs: Blob[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.type.startsWith('image/')) {
+      const blob = item.getAsFile()
+      if (blob) imageBlobs.push(blob)
+    }
+  }
+
+  if (imageBlobs.length === 0) return // 纯文本粘贴，走浏览器默认行为
+  e.preventDefault()
+
+  for (const blob of imageBlobs) {
+    if (pendingScreenshots.value.length >= 9) break
+    const dataUrl = await blobToDataURL(blob)
+    // 先 await 确保后端缓存完成，避免用户粘贴后立即发送时 ChatView 取不到图
+    await invoke('store_pending_screenshot', { dataUrl }).catch(() => {})
+    pendingScreenshots.value.push(dataUrl)
+    if (!isExpanded.value) {
+      toggleInput()
+    } else {
+      nextTick(() => {
+        inputRef.value?.focus()
+        autoResize()
+      })
+    }
+  }
+}
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
 // 按键处理
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -263,6 +312,12 @@ onMounted(async () => {
   unlistenStreamEnd = await listen('chat-stream-end', () => {
     isSending.value = false
     nextTick(() => inputRef.value?.focus())
+  })
+  // 监听悬浮球隐藏事件（Cmd+D/Ctrl+D 隐藏时），收起输入框回到初始状态
+  unlistenBallToggled = await listen('ball-toggled-hidden', () => {
+    if (isExpanded.value) {
+      collapseInput()
+    }
   })
   // 监听截图预览（长按空格 / Cmd+E，自动展开输入框并挂上缩略图）
   unlistenQuickScreenshot = await listen<{ imageBase64: string }>('quick-screenshot-preview', (event) => {
@@ -301,6 +356,7 @@ onUnmounted(() => {
   if (unlistenStreamEnd) unlistenStreamEnd()
   if (unlistenQuickScreenshot) unlistenQuickScreenshot()
   if (unlistenScreenshotPermission) unlistenScreenshotPermission()
+  if (unlistenBallToggled) unlistenBallToggled()
   if (noticeTimer) clearTimeout(noticeTimer)
 })
 </script>
@@ -367,6 +423,7 @@ onUnmounted(() => {
               :disabled="isSending"
               @keydown="handleKeydown"
               @input="autoResize"
+              @paste="handlePaste"
             />
             <!-- IT 数据库检索切换按钮 -->
             <button
@@ -601,7 +658,6 @@ onUnmounted(() => {
   resize: none;
   line-height: 28px;
   min-height: 28px;
-  padding: 0;
 }
 
 .chat-input::placeholder {

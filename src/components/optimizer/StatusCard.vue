@@ -66,7 +66,7 @@ const statusText = computed(() => {
     </CollapsibleTrigger>
     <CollapsibleContent>
       <div class="px-3 pb-3 pt-1 border-t bg-muted/30">
-        <p class="text-xs text-muted-foreground mb-2">{{ summary }}</p>
+        <p class="text-xs text-muted-foreground mb-2 break-all">{{ summary }}</p>
         <slot />
       </div>
     </CollapsibleContent>

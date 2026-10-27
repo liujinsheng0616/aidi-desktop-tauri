@@ -31,28 +31,44 @@ while IFS= read -r disk; do
         disk_type=$(echo "$disk_details" | grep "Solid State" | grep -q "Yes" && echo "SSD" || echo "HDD")
         [ -z "$disk_type" ] && disk_type="Unknown"
 
-        health_status="Healthy"
-
         # Try smartctl for wear data (if installed)
         wear_percent=0
         power_on_hours=0
         temperature=0
         read_errors=0
         write_errors=0
+        smartctl_available=false
 
         if command -v smartctl &>/dev/null; then
             smart_data=$(smartctl -A "$disk_path" 2>/dev/null)
-            wear_percent=$(echo "$smart_data" | grep "Percentage Used" | awk '{print $NF}' | tr -d ' %' 2>/dev/null)
-            [ -z "$wear_percent" ] && wear_percent=0
-            power_on_hours=$(echo "$smart_data" | grep "Power On Hours" | awk '{print $NF}' 2>/dev/null)
-            [ -z "$power_on_hours" ] && power_on_hours=0
-            temperature=$(echo "$smart_data" | grep "Temperature" | head -1 | awk '{print $NF}' 2>/dev/null)
-            [ -z "$temperature" ] && temperature=0
+            if [ -n "$smart_data" ]; then
+                smartctl_available=true
+                wear_percent=$(echo "$smart_data" | grep "Percentage Used" | awk '{print $NF}' | tr -d ' %' 2>/dev/null)
+                [ -z "$wear_percent" ] && wear_percent=0
+                power_on_hours=$(echo "$smart_data" | grep "Power On Hours" | awk '{print $NF}' 2>/dev/null)
+                [ -z "$power_on_hours" ] && power_on_hours=0
+                temperature=$(echo "$smart_data" | grep "Temperature" | head -1 | awk '{print $NF}' 2>/dev/null)
+                [ -z "$temperature" ] && temperature=0
+            fi
         fi
 
-        if [ "$wear_percent" -gt 80 ] 2>/dev/null || [ "$power_on_hours" -gt 30000 ] 2>/dev/null; then
+        # 推导单盘 healthStatus（与 worst_status 同一阈值）
+        # 没装 smartctl 或读不到数据时输出 unknown，不再硬编码 Healthy
+        if [ "$smartctl_available" = "true" ]; then
+            if [ "$wear_percent" -gt 80 ] 2>/dev/null || [ "$power_on_hours" -gt 30000 ] 2>/dev/null; then
+                health_status="Unhealthy"
+            elif [ "$wear_percent" -gt 50 ] 2>/dev/null || [ "$power_on_hours" -gt 20000 ] 2>/dev/null; then
+                health_status="Warning"
+            else
+                health_status="Healthy"
+            fi
+        else
+            health_status="Unknown"
+        fi
+
+        if [ "$health_status" = "Unhealthy" ]; then
             worst_status="danger"
-        elif [ "$wear_percent" -gt 50 ] 2>/dev/null || [ "$power_on_hours" -gt 20000 ] 2>/dev/null; then
+        elif [ "$health_status" = "Warning" ]; then
             [ "$worst_status" != "danger" ] && worst_status="warning"
         fi
 

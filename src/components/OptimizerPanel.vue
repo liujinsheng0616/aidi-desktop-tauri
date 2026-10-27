@@ -12,9 +12,6 @@ import DiskHealth from './optimizer/DiskHealth.vue'
 import SystemInfo from './optimizer/SystemInfo.vue'
 import { useOptimizer } from '@/stores/optimizer'
 import { listen } from '@tauri-apps/api/event'
-import { platform } from '@tauri-apps/plugin-os'
-
-const isMac = ref(false)
 
 const {
   isScanning,
@@ -131,8 +128,6 @@ async function handleQuickOptimize() {
 }
 
 onMounted(async () => {
-  const p = await platform()
-  isMac.value = p === 'macos'
   applyTheme()
   scanAll()
   unlistenSettings = await listen('settings-updated', onSettingsUpdated)
@@ -179,9 +174,9 @@ onUnmounted(() => {
             <DiskClean v-if="diskResult.details" :details="diskResult.details" />
           </StatusCard>
 
-          <!-- Memory (Windows only) -->
+          <!-- Memory -->
           <StatusCard
-            v-if="!isMac && memoryResult"
+            v-if="memoryResult"
             icon="🧠"
             title="内存状态"
             :status="memoryResult.status"
@@ -203,9 +198,9 @@ onUnmounted(() => {
             <StartupManager v-if="startupResult.details" :details="startupResult.details" />
           </StatusCard>
 
-          <!-- Disk Health (Windows only) -->
+          <!-- Disk Health -->
           <StatusCard
-            v-if="!isMac && healthResult"
+            v-if="healthResult"
             icon="💿"
             title="磁盘健康"
             :status="healthResult.status"

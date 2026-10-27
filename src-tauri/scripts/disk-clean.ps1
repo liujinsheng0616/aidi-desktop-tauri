@@ -22,7 +22,7 @@ try {
 function Contains-Category($name) { return $categories -contains $name }
 
 function Add-Detail($category, $path, $size, $status, $reason) {
-    if ($results.details.Count -lt 50) {
+    if ($results.details.Count -lt 100) {
         $results.details += @{ category = $category; path = $path; size = $size; status = $status; reason = $reason }
     }
 }
@@ -82,8 +82,10 @@ if (Contains-Category "systemTemp") {
                 if ($deleted) {
                     $results.cleaned += $itemSize
                     $results.successCount++
+                    Add-Detail "systemTemp" $_.Name $itemSize "success" ""
                 } else {
                     $results.failedCount++
+                    Add-Detail "systemTemp" $_.Name $itemSize "failed" "File in use"
                 }
             } catch { }
         }
@@ -101,8 +103,10 @@ if (Contains-Category "prefetch") {
                 if ($deleted) {
                     $results.cleaned += $itemSize
                     $results.successCount++
+                    Add-Detail "prefetch" $_.Name $itemSize "success" ""
                 } else {
                     $results.failedCount++
+                    Add-Detail "prefetch" $_.Name $itemSize "failed" "File in use"
                 }
             } catch { }
         }
@@ -114,6 +118,7 @@ if (Contains-Category "recycleBin") {
     try {
         $sizeBefore = 0
         $itemCountBefore = 0
+        $recycleItems = @()
         try {
             $shell = New-Object -ComObject Shell.Application
             $recycleBin = $shell.NameSpace(0x0a)
@@ -124,7 +129,9 @@ if (Contains-Category "recycleBin") {
                     foreach ($item in $items) {
                         try {
                             $s = $item.ExtendedProperty("Size")
-                            if ($s) { $sizeBefore += [long]$s }
+                            $itemSize = if ($s) { [long]$s } else { 0 }
+                            $sizeBefore += $itemSize
+                            $recycleItems += @{ name = $item.Name; size = $itemSize }
                         } catch { }
                     }
                 }
@@ -188,16 +195,20 @@ if (Contains-Category "recycleBin") {
 
             $actualCleared = $itemCountBefore - $itemCountAfter
             if ($actualCleared -gt 0) {
-                $clearedSize = 0
-                if ($itemCountBefore -gt 0) { $clearedSize = [long]($sizeBefore * $actualCleared / $itemCountBefore) }
+                $clearedSize = [long]($sizeBefore * $actualCleared / $itemCountBefore)
                 $results.cleaned += $clearedSize
                 $results.successCount += $actualCleared
-                Add-Detail "recycleBin" "RecycleBin" $clearedSize "success" "Cleared $actualCleared items"
+                # 逐个文件添加明细
+                foreach ($ri in $recycleItems) {
+                    Add-Detail "recycleBin" $ri.name $ri.size "success" ""
+                }
             } else {
-                $results.failedCount++
+                $results.failedCount += $itemCountBefore
                 $reason = "Cannot clear recycle bin"
                 if ($errorMsg) { $reason = $errorMsg }
-                Add-Detail "recycleBin" "RecycleBin" 0 "failed" $reason
+                foreach ($ri in $recycleItems) {
+                    Add-Detail "recycleBin" $ri.name $ri.size "failed" $reason
+                }
             }
         } else {
             Add-Detail "recycleBin" "RecycleBin" 0 "success" "Already empty"
@@ -303,13 +314,13 @@ if (Contains-Category "browserCache") {
     }
 }
 
-# Output
+# Output — force details to always be an array (ConvertTo-Json quirk: 1-element arrays become objects)
 $cleanedMB = [math]::Round($results.cleaned / 1MB, 2)
 $output = @{
     cleaned = $results.cleaned
     cleanedMB = $cleanedMB
     successCount = $results.successCount
     failedCount = $results.failedCount
-    details = $results.details
+    details = @($results.details)
 }
 $output | ConvertTo-Json -Depth 3 -Compress

@@ -67,10 +67,37 @@ while IFS= read -r disk; do
         size_bytes=$(echo "$disk_details" | grep "Disk Size" | grep -o '[0-9]* Bytes' | awk '{print $1}')
         size_gb=$(echo "scale=2; ${size_bytes:-0} / 1073741824" | bc 2>/dev/null || echo "0")
 
+        # Try smartctl for wear data; derive healthStatus (no longer hardcoded Healthy)
+        wear_percent=0
+        power_on_hours=0
+        smartctl_available=false
+        if command -v smartctl &>/dev/null; then
+            smart_data=$(smartctl -A "$disk_path" 2>/dev/null)
+            if [ -n "$smart_data" ]; then
+                smartctl_available=true
+                wear_percent=$(echo "$smart_data" | grep "Percentage Used" | awk '{print $NF}' | tr -d ' %' 2>/dev/null)
+                [ -z "$wear_percent" ] && wear_percent=0
+                power_on_hours=$(echo "$smart_data" | grep "Power On Hours" | awk '{print $NF}' 2>/dev/null)
+                [ -z "$power_on_hours" ] && power_on_hours=0
+            fi
+        fi
+
+        if [ "$smartctl_available" = "true" ]; then
+            if [ "$wear_percent" -gt 80 ] 2>/dev/null || [ "$power_on_hours" -gt 30000 ] 2>/dev/null; then
+                health_status="Unhealthy"
+            elif [ "$wear_percent" -gt 50 ] 2>/dev/null || [ "$power_on_hours" -gt 20000 ] 2>/dev/null; then
+                health_status="Warning"
+            else
+                health_status="Healthy"
+            fi
+        else
+            health_status="Unknown"
+        fi
+
         if [ -n "$physical_disks" ]; then
             physical_disks="$physical_disks,"
         fi
-        physical_disks="$physical_disks{ \"name\": \"$disk_name\", \"mediaType\": \"$disk_type\", \"size\": ${size_bytes:-0}, \"sizeGB\": $size_gb, \"healthStatus\": \"Healthy\", \"operationalStatus\": \"OK\" }"
+        physical_disks="$physical_disks{ \"name\": \"$disk_name\", \"mediaType\": \"$disk_type\", \"size\": ${size_bytes:-0}, \"sizeGB\": $size_gb, \"healthStatus\": \"$health_status\", \"operationalStatus\": \"OK\" }"
     fi
 done <<< "$disk_info"
 
