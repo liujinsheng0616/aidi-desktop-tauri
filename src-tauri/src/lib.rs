@@ -564,22 +564,8 @@ fn open_screenshot_preview(data_url: String) -> Result<(), String> {
         .map_err(|e| format!("base64 解码失败: {e}"))?;
     let path = std::env::temp_dir().join("aidi-screenshot-preview.png");
     std::fs::write(&path, &bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
-    #[cfg(target_os = "macos")]
-    std::process::Command::new("open")
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("打开预览失败: {e}"))?;
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        std::process::Command::new("cmd")
-            .args(["/C", "start", ""])
-            .arg(&path)
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("打开预览失败: {e}"))?;
-    }
+    // 使用 open crate：Windows 上走 ShellExecuteW（不经过 cmd），避免命令注入
+    open::that_detached(&path).map_err(|e| format!("打开预览失败: {e}"))?;
     Ok(())
 }
 
@@ -2497,32 +2483,14 @@ async fn send_chat_message(app: tauri::AppHandle, message: String, enable_wiki_s
 /// 在系统默认浏览器中打开外部链接
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        // 使用 cmd /c start "" "URL" 打开链接：
-        // - start 是 cmd 内置命令，调用系统默认浏览器
-        // - 第一个 "" 是窗口标题占位（否则 start 会把 URL 当标题）
-        // - URL 用引号包裹，& 不会被当作命令分隔符
-        // - CREATE_NO_WINDOW 避免 cmd 窗口闪现
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &url])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("打开链接失败: {}", e))?;
+    // 协议白名单：仅允许 http/https，防止 file:// 等协议打开本地文件或触发意外应用
+    let parsed = url::Url::parse(&url).map_err(|e| format!("无效的 URL: {}", e))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("不允许的协议: {}，仅支持 http/https", scheme)),
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        #[cfg(target_os = "macos")]
-        let cmd = "open";
-        #[cfg(target_os = "linux")]
-        let cmd = "xdg-open";
-        std::process::Command::new(cmd)
-            .arg(&url)
-            .spawn()
-            .map_err(|e| format!("打开链接失败: {}", e))?;
-    }
+    // 使用 open crate：Windows 上走 ShellExecuteW（不经过 cmd），避免命令注入
+    open::that_detached(&url).map_err(|e| format!("打开链接失败: {}", e))?;
     Ok(())
 }
 
@@ -3185,10 +3153,22 @@ struct SoftwareStatus {
 #[derive(serde::Serialize)]
 struct InstallResult {
     save_path: String,
-    /// "installed" = 注册表确认已装；"unknown" = 未能确认（可能仍在安装、被取消、或无检测映射）
+    /// "installed" = 注册表对比确认有变化（新增或版本升级）；
+    /// "cancelled" = 注册表与安装前快照一致（用户取消/未变化，仅当安装前已存在该软件项）；
+    /// "unknown" = 无检测映射、或安装前未装且超时仍未出现（未能确认）
     final_status: String,
     version: Option<String>,
     display_name: Option<String>,
+}
+
+/// 安装进度通知（通过 Tauri 事件推送给前端，实时更新按钮文字）
+#[cfg(target_os = "windows")]
+#[derive(serde::Serialize, Clone)]
+struct InstallProgress {
+    /// "downloading" | "checking" | "installing" | "verifying"
+    stage: String,
+    /// 下载 URL，前端用来匹配对应按钮（防止并发安装时事件串台）
+    download_url: String,
 }
 
 /// 软件下载 URL 文件名子串 → 注册表 DisplayName 候选子串列表
@@ -3240,6 +3220,61 @@ const SOFTWARE_REGISTRY_MAP: &[(&str, &[&str])] = &[
     // PDF转换器、工业云插件等名称过于宽泛，不配置检测，回退到 "unknown"
 ];
 
+/// 软件下载 URL 文件名子串 → 静默安装命令行参数
+///
+/// 匹配规则同 SOFTWARE_REGISTRY_MAP：URL 文件名大小写不敏感 contains 匹配。
+/// 命中后将参数列表传给安装器，实现无 GUI 静默安装。
+/// 未命中的软件不加参数（走默认行为，安装器可能弹 GUI）。
+///
+/// 常见参数：
+/// - NSIS 安装器：/S（大写 S）
+/// - Inno Setup：/VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+/// - MSI：/quiet /norestart
+/// - 部分定制安装器：/silent（非标准，不保证有效）
+#[cfg(target_os = "windows")]
+const SOFTWARE_SILENT_ARGS: &[(&str, &[&str])] = &[
+    // NSIS 安装器 (/S)
+    ("7z", &["/S"]),
+    ("WinRAR", &["/S"]),
+    ("OBS", &["/S"]),
+    ("dbeaver", &["/S"]),
+    ("FreeCAD", &["/S"]),
+    ("PotPlayer", &["/S"]),
+    ("Postman", &["/S"]),
+    ("TraeCode", &["/S"]),
+    ("Qoder", &["/S"]),
+    ("kimi", &["/S"]),
+    ("pdfgear", &["/S"]),
+    ("WorkBuddy", &["/S"]),
+    ("CADReaderPc", &["/S"]),
+    ("VisualStudioSetup", &["/S"]),
+    ("WPS", &["/S"]),
+    ("福昕PDF", &["/S"]),
+    // Inno Setup 安装器
+    ("Git.exe", &["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]),
+    // MSI 安装器 (/quiet /norestart)
+    ("teams", &["/quiet", "/norestart"]),
+    ("Zoom", &["/quiet", "/norestart"]),
+    ("CitrixWorkspace", &["/quiet", "/norestart"]),
+    ("VNC-SERVER", &["/quiet", "/norestart"]),
+    ("理光打印", &["/quiet", "/norestart"]),
+    // Chrome 安装器
+    ("ChromeSetup", &["/silent", "/install"]),
+    // 定制安装器 (/silent，非标准，不保证有效)
+    ("搜狗拼音", &["/silent"]),
+    ("搜狗 五笔", &["/silent"]),
+    ("WeChatWin", &["/silent"]),
+    ("腾讯会议", &["/silent"]),
+    ("剪映", &["/silent"]),
+    ("影刀", &["/silent"]),
+    ("豆包", &["/silent"]),
+    ("钉钉", &["/silent"]),
+    ("Foxmail", &["/silent"]),
+    ("网易有道", &["/silent"]),
+    ("飞书", &["/silent"]),
+    ("Feilian", &["/silent"]),
+];
+
 /// 根据 URL 查找该软件的注册表 DisplayName 候选子串列表
 #[cfg(target_os = "windows")]
 fn lookup_display_names(download_url: &str) -> Option<&'static [&'static str]> {
@@ -3250,6 +3285,21 @@ fn lookup_display_names(download_url: &str) -> Option<&'static [&'static str]> {
         }
     }
     None
+}
+
+/// 根据 URL 查找该软件的静默安装参数；未命中返回空切片
+#[cfg(target_os = "windows")]
+fn lookup_silent_args(download_url: &str) -> &'static [&'static str] {
+    let Some(filename) = download_url.rsplit('/').next() else {
+        return &[];
+    };
+    let filename = filename.to_lowercase();
+    for (url_sub, args) in SOFTWARE_SILENT_ARGS {
+        if filename.contains(&url_sub.to_lowercase()) {
+            return args;
+        }
+    }
+    &[]
 }
 
 /// 通过 PowerShell 查询注册表 Uninstall 项，检测指定 DisplayName 子串的软件
@@ -3351,16 +3401,21 @@ fn check_software_installed(download_url: String) -> Result<SoftwareStatus, Stri
 ///
 /// 问题 2 修复：不再依赖 child.wait() 退出码判断"安装成功"
 /// （启动器型安装程序如腾讯会议，派生真实安装进程后立即退出，退出码无意义，
-///  原实现会误报"安装完成"）。改为轮询注册表 Uninstall 项，目标软件出现即
-/// 确认安装成功；超时（5 分钟）未出现则返回 "unknown"，前端提示"未能确认"。
+///  原实现会误报"安装完成"）。改为轮询注册表 Uninstall 项确认。
+///
+/// 问题 3 修复（方案 A）：覆盖重装时用户取消安装，旧版注册表项仍存在，
+/// 轮询立刻命中旧项 → 误报"安装完成"。改为安装前拍注册表快照，安装后对比：
+/// 从无到有或版本号变化 → installed；与快照一致 → cancelled（用户取消/未变化）；
+/// 无检测映射或安装前未装且超时 → unknown。
 #[tauri::command]
 async fn download_and_install_software(
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     download_url: String,
 ) -> Result<InstallResult, String> {
     #[cfg(target_os = "macos")]
     {
         let _ = &download_url;
+        let _ = &app;
         return Err("这些软件安装包均为 Windows 版本，无法在 macOS 上运行，请在 Windows 电脑上使用此功能".to_string());
     }
 
@@ -3375,8 +3430,16 @@ async fn download_and_install_software(
             .to_string();
         let save_path = tmp_dir.join(format!("aidi-software-{}", file_name));
 
-        // 下载（async，不阻塞运行时）
-        let resp = reqwest::get(&download_url)
+        // 下载（async，不阻塞运行时），加 5 分钟超时避免网络问题永久挂起
+        let _ = app.emit("install-progress", InstallProgress {
+            stage: "downloading".to_string(),
+            download_url: download_url.clone(),
+        });
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+        let resp = client.get(&download_url).send()
             .await
             .map_err(|e| format!("下载失败: {}", e))?;
         let bytes = resp.bytes()
@@ -3388,9 +3451,40 @@ async fn download_and_install_software(
         // 启动安装包 + 等待 + 轮询注册表全部是阻塞操作，
         // 放入 spawn_blocking 避免阻塞 tokio 异步运行时。
         let download_url_for_poll = download_url.clone();
+        let app_clone = app.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<InstallResult, String> {
-            // 启动安装包
-            let mut child = std::process::Command::new(&save_path)
+            // 先查检测映射，用于安装前拍快照
+            let display_names = lookup_display_names(&download_url_for_poll);
+            // 查静默安装参数
+            let silent_args = lookup_silent_args(&download_url_for_poll);
+
+            // 通知前端：正在检测已装版本
+            let _ = app_clone.emit("install-progress", InstallProgress {
+                stage: "checking".to_string(),
+                download_url: download_url_for_poll.clone(),
+            });
+
+            // 安装前拍快照：记录每个候选名的注册表状态。
+            // None=未装；Some((name,ver))=已装版本。安装器运行期间写入的新项与快照
+            // 对比即可分辨"覆盖重装取消"（注册表与快照一致）与"真正装了"（有变化）。
+            let snapshot: Vec<Option<(String, String)>> = match &display_names {
+                Some(names) => names.iter().map(|n| check_installed_via_powershell(n)).collect(),
+                None => Vec::new(),
+            };
+            let had_prior_install = snapshot.iter().any(|s| s.is_some());
+
+            // 通知前端：正在安装
+            let _ = app_clone.emit("install-progress", InstallProgress {
+                stage: "installing".to_string(),
+                download_url: download_url_for_poll.clone(),
+            });
+
+            // 启动安装包（带静默参数，实现无 GUI 安装）
+            let mut cmd = std::process::Command::new(&save_path);
+            if !silent_args.is_empty() {
+                cmd.args(silent_args);
+            }
+            let mut child = cmd
                 .spawn()
                 .map_err(|e| {
                     // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
@@ -3404,13 +3498,11 @@ async fn download_and_install_software(
             // 等待启动的进程退出。
             // 单进程安装程序：阻塞到用户完成或取消；
             // 启动器型安装程序：派生真实安装进程后立即退出，wait 很快返回。
-            // 注意：不再使用退出码判断成功——启动器型退出码无意义，且部分安装程序
-            // 用户取消时退出码也是 0。改为下面的注册表轮询确认。
+            // 注意：不使用退出码判断成功——改为下面的注册表快照对比（方案 A）。
             let _exit_status = child.wait()
                 .map_err(|e| format!("等待安装程序退出失败: {}", e))?;
 
             let save_path_str = save_path.to_string_lossy().to_string();
-            let display_names = lookup_display_names(&download_url_for_poll);
 
             // 无检测映射：无法轮询确认，直接返回 unknown
             let Some(names) = display_names else {
@@ -3422,10 +3514,28 @@ async fn download_and_install_software(
                 });
             };
 
-            // 轮询注册表，最长 5 分钟。目标软件 Uninstall 条目出现即确认安装成功。
+            // 通知前端：正在确认安装结果
+            let _ = app_clone.emit("install-progress", InstallProgress {
+                stage: "verifying".to_string(),
+                download_url: download_url_for_poll.clone(),
+            });
+
+            // 轮询注册表，最长 5 分钟。只有相对快照发生变化才确认安装成功。
+            // 从无到有、或版本号变化 → installed；版本和快照一致 → 继续轮询（用户可能取消了）。
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
             loop {
                 if std::time::Instant::now() >= deadline {
+                    // 超时分流：安装前已装但无变化 → cancelled；安装前未装且未出现 → unknown
+                    if had_prior_install {
+                        // 填快照里的旧版本，供前端显示"可能已取消 v<旧版>"
+                        let (prev_dn, prev_ver) = snapshot.iter().flatten().next().cloned().unwrap_or_default();
+                        return Ok(InstallResult {
+                            save_path: save_path_str,
+                            final_status: "cancelled".to_string(),
+                            version: if prev_ver.is_empty() { None } else { Some(prev_ver) },
+                            display_name: if prev_dn.is_empty() { None } else { Some(prev_dn) },
+                        });
+                    }
                     return Ok(InstallResult {
                         save_path: save_path_str,
                         final_status: "unknown".to_string(),
@@ -3433,14 +3543,21 @@ async fn download_and_install_software(
                         display_name: None,
                     });
                 }
-                for name in names {
+                for (i, name) in names.iter().enumerate() {
                     if let Some((dn, ver)) = check_installed_via_powershell(name) {
-                        return Ok(InstallResult {
-                            save_path: save_path_str,
-                            final_status: "installed".to_string(),
-                            version: if ver.is_empty() { None } else { Some(ver) },
-                            display_name: Some(dn),
-                        });
+                        let changed = match &snapshot[i] {
+                            None => true,                                  // 从无到有
+                            Some((_, prev_ver)) => prev_ver != &ver,      // 版本升级
+                        };
+                        if changed {
+                            return Ok(InstallResult {
+                                save_path: save_path_str,
+                                final_status: "installed".to_string(),
+                                version: if ver.is_empty() { None } else { Some(ver) },
+                                display_name: Some(dn),
+                            });
+                        }
+                        // 版本和快照一致 → 不算成功，继续轮询
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_secs(3));

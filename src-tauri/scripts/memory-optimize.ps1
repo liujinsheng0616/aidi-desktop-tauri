@@ -28,7 +28,8 @@ public class MemoryOptimizer {
 }
 "@
 
-Get-Process | Where-Object { $_.WorkingSet64 -gt 50MB } | Sort-Object WorkingSet64 -Descending | Select-Object -First 10 | ForEach-Object {
+$systemProcesses = @('svchost','csrss','lsass','wininit','services','smss','winlogon','dwm','System','Idle','Registry','spoolsv','SearchIndexer','fontdrvhost','sihost','taskhostw','explorer')
+Get-Process | Where-Object { $_.WorkingSet64 -gt 100MB -and $_.Name -notin $systemProcesses } | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 | ForEach-Object {
     try {
         $handle = $_.Handle
         $wsBefore = $_.WorkingSet64

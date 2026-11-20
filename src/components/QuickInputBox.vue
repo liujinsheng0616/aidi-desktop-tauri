@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, emit as emitTauriEvent, UnlistenFn } from '@tauri-apps/api/event'
+import { trackEvent } from '@/services/tracker'
 
 const props = defineProps<{
   size?: number
@@ -26,6 +27,7 @@ const isWikiActive = ref(false) // IT 数据库检索开关
 // 截图权限缺失提示：借 placeholder 显示，避免在小窗口里做浮层被窗口边界裁掉
 const permissionNotice = ref<string | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
+let screenshotSyncPromise: Promise<void> = Promise.resolve()
 
 // 事件监听器清理函数
 let unlistenCollapse: UnlistenFn | null = null
@@ -63,6 +65,12 @@ function openPermissionSettings() {
   noticeTimer = null
   permissionNotice.value = null
   nextTick(() => inputRef.value?.focus())
+}
+
+/** IT 数据库检索开关 */
+function toggleWiki() {
+  isWikiActive.value = !isWikiActive.value
+  trackEvent('toggle_wiki_search', { detail: { enabled: isWikiActive.value } })
 }
 
 // 点击搜索按钮 - 展开/收起输入框
@@ -175,13 +183,16 @@ function autoResize() {
 // 移除截图预览（按索引删除单张）
 function removeScreenshot(index: number) {
   pendingScreenshots.value.splice(index, 1)
-  // 同步后端缓存：先清空，再把剩余的重新存入
-  // 否则 get_pending_screenshot 会取到已删除的图
-  invoke('clear_pending_screenshot').then(() => {
-    pendingScreenshots.value.forEach(url => {
-      invoke('store_pending_screenshot', { dataUrl: url }).catch(() => {})
+  // 同步后端缓存：串行链式调用，保证多次快速删除不会交错
+  screenshotSyncPromise = screenshotSyncPromise
+    .then(() => invoke('clear_pending_screenshot'))
+    .then(() => {
+      const stores = pendingScreenshots.value.map(url =>
+        invoke('store_pending_screenshot', { dataUrl: url }).catch(() => {})
+      )
+      return Promise.all(stores).then(() => undefined)
     })
-  }).catch(() => {})
+    .catch(() => {})
   // 截图行变化后重算容器高度
   nextTick(() => autoResize())
 }
@@ -206,6 +217,14 @@ async function sendMessage() {
   // 就会把 ChatView 尚未取走的截图清掉，导致只发出文字、图丢失。
   const imgSnapshot = [...pendingScreenshots.value]
   pendingScreenshots.value = []
+  // 埋点：发送消息（QuickInputBox 入口）
+  trackEvent('quick_input_submit', {
+    detail: {
+      hasScreenshot: imgSnapshot.length > 0,
+      enableWikiSearch: isWikiActive.value,
+      textLength: text.length,
+    },
+  })
   try {
     // 调用 Rust 后端发送消息并显示聊天窗口
     // 注：截图走后端 static 缓存，ChatView 发送时主动拉取（多模态）
@@ -285,8 +304,9 @@ function blobToDataURL(blob: Blob): Promise<string> {
 // 按键处理
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
-    // keyCode === 229 表示 IME 正在组合输入，此时不处理
-    if (e.keyCode === 229) {
+    // IME 组合输入中（keyCode 229 或 isComposing=true）不处理，
+    // 否则确认候选词的 Enter 会误发半成品中文消息
+    if (e.isComposing || e.keyCode === 229) {
       return
     }
     e.preventDefault()
@@ -329,6 +349,8 @@ onMounted(async () => {
       // 最多允许 9 张截图，超出则忽略
       if (pendingScreenshots.value.length >= 9) return
       pendingScreenshots.value.push(event.payload.imageBase64)
+      // 埋点：截图成功
+      trackEvent('screenshot_captured', { detail: { total: pendingScreenshots.value.length } })
       if (!isExpanded.value) {
         toggleInput()
       } else {
@@ -430,7 +452,7 @@ onUnmounted(() => {
               class="wiki-toggle-btn"
               :class="{ 'wiki-toggle-btn--active': isWikiActive }"
               :title="isWikiActive ? 'IT数据库已开启（点击关闭）' : '开启IT数据库检索'"
-              @click.stop="isWikiActive = !isWikiActive"
+              @click.stop="toggleWiki"
             >
               <span class="wiki-toggle-label">IT数据库</span>
             </button>

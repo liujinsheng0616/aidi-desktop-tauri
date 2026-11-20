@@ -4,6 +4,7 @@ import { ChevronRight, Palette, Zap } from 'lucide-vue-next'
 import { Card } from '@/components/ui/card'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { trackEvent } from '@/services/tracker'
 
 function applyThemeFromMode(mode: string) {
   let isDark = mode === 'dark'
@@ -17,8 +18,12 @@ function applyTheme() {
   const saved = localStorage.getItem('aidi-settings')
   let mode = 'system'
   if (saved) {
-    const s = JSON.parse(saved)
-    mode = s.themeMode || 'system'
+    try {
+      const s = JSON.parse(saved)
+      mode = s.themeMode || 'system'
+    } catch {
+      // settings 损坏时回退默认值
+    }
   }
   applyThemeFromMode(mode)
 }
@@ -33,6 +38,8 @@ function hideSubmenu() {
 
 function onOptimizerClick(event: MouseEvent) {
   event.stopPropagation()
+  // 埋点：打开优化器
+  trackEvent('open_optimizer')
   // 直接显示优化器窗口
   invoke('show_optimizer_window')
   // 隐藏菜单（使用 hide_menu 而不是 hide_menu_window，保持状态一致）

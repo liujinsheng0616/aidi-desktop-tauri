@@ -30,11 +30,15 @@ const themeModes = [
 function loadSettings() {
   const saved = localStorage.getItem('aidi-settings')
   if (saved) {
-    const s = JSON.parse(saved)
-    themeMode.value = s.themeMode || 'system'
-    opacity.value = [s.opacity ?? 100]
-    ballSize.value = [s.ballSize || 60]
-    colorTheme.value = s.colorTheme || 'cyan-purple'
+    try {
+      const s = JSON.parse(saved)
+      themeMode.value = s.themeMode || 'system'
+      opacity.value = [s.opacity ?? 100]
+      ballSize.value = [s.ballSize || 60]
+      colorTheme.value = s.colorTheme || 'cyan-purple'
+    } catch {
+      // settings 损坏时回退默认值
+    }
   }
 }
 

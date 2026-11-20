@@ -42,7 +42,12 @@ async function handleOptimize() {
     optimizeResult.value = result as any
     await refreshMemory()
   } catch (e) {
-    // 优化失败，忽略
+    optimizeResult.value = {
+      success: false,
+      freedMB: 0,
+      processesOptimized: 0,
+      errorReason: null,
+    }
   } finally {
     isOptimizing.value = false
   }

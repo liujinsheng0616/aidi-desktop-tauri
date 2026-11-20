@@ -2,6 +2,7 @@ import { ref, reactive, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { platform } from '@tauri-apps/plugin-os'
 import { getUser, fetchWithAuth } from './auth'
+import { trackDevice, trackOptimization, trackEvent, getTrackingUserId } from '@/services/tracker'
 
 export type Status = 'good' | 'warning' | 'danger' | 'error' | 'info' | 'scanning'
 
@@ -198,6 +199,10 @@ async function scanAll() {
   error.value = null
   deviceReported.value = false
 
+  // 埋点：优化器扫描启动
+  const _user = getUser()
+  trackEvent('optimizer_scan', { userId: _user?.fsUserId || _user?.id || getTrackingUserId() })
+
   try {
     // Map step keys to Tauri command names
     const tauriCommands: Record<string, string> = {
@@ -246,6 +251,22 @@ async function scanAll() {
     const systemRes = scanResults.find(r => r.dimension === 'system')
     if (systemRes && systemRes.status !== 'error') {
       reportDeviceInfo(systemRes.details as SystemDetails)
+      // 同时上报到 Node.js tracker（供管理后台展示）
+      const user = getUser()
+      {
+        const d = systemRes.details as SystemDetails
+        trackDevice({
+          userId: user?.fsUserId || user?.id || getTrackingUserId(),
+          userName: user?.name,
+          serialNumber: d.serialNumber,
+          deviceModel: d.model,
+          osVersion: d.os?.version,
+          cpu: d.cpu?.name,
+          memory: d.memory?.totalGB ? `${d.memory.totalGB}GB` : undefined,
+          disk: d.storage?.totalGB ? `${d.storage.totalGB}GB` : undefined,
+          rawInfo: JSON.stringify(d),
+        })
+      }
     }
   } catch (e: any) {
     error.value = e.message
@@ -254,18 +275,29 @@ async function scanAll() {
   }
 }
 
+function optimizationIdentity() {
+  const user = getUser()
+  return { userId: user?.fsUserId || user?.id || getTrackingUserId(), userName: user?.name, deviceId: systemResult.value?.details?.serialNumber }
+}
+async function runOptimization(command: string, args: Record<string, unknown> | undefined, optType: string, detail: (result: any) => Record<string, unknown>) {
+  try {
+    const result: any = await invoke(command, args)
+    const success = result?.success !== false && !(result?.failedCount > 0)
+    trackOptimization({ ...optimizationIdentity(), optType, optDetail: JSON.stringify(detail(result)), success, errorMessage: success ? undefined : result?.errorReason || '操作部分或全部失败' })
+    return result
+  } catch (error) {
+    trackOptimization({ ...optimizationIdentity(), optType, success: false, errorMessage: String(error) })
+    throw error
+  }
+}
 async function cleanDisk(categories: string[]) {
-  const categoriesJson = JSON.stringify(categories)
-  return await invoke('optimizer_disk_clean', { categoriesJson })
+  return runOptimization('optimizer_disk_clean', { categoriesJson: JSON.stringify(categories) }, 'disk_clean', r => ({ categories, cleanedMB: r?.cleanedMB ?? (r?.cleaned || 0) / 1024 / 1024, failedCount: r?.failedCount || 0, details: r?.details }))
 }
-
 async function optimizeMemory() {
-  return await invoke('optimizer_memory_optimize')
+  return runOptimization('optimizer_memory_optimize', undefined, 'memory_optimize', r => ({ freedMB: r?.freedMB ?? (r?.freedBytes || 0) / 1024 / 1024, processesOptimized: r?.processesOptimized }))
 }
-
 async function toggleStartup(item: StartupItem, enabled: boolean) {
-  const itemJson = JSON.stringify({ ...item, enabled })
-  return await invoke('optimizer_startup_toggle', { itemJson })
+  return runOptimization('optimizer_startup_toggle', { itemJson: JSON.stringify({ ...item, enabled }) }, 'startup_toggle', () => ({ name: item.name, enabled, startupDisabled: enabled ? 0 : 1 }))
 }
 
 async function refreshDisk() {
@@ -317,7 +349,7 @@ async function quickOptimize() {
   if (optimizeSelections.disk.categories.length > 0) {
     tasks.push(
       cleanDisk([...optimizeSelections.disk.categories])
-        .then(r => { result.diskCleaned = (r as any)?.cleaned || 0 })
+        .then(r => { result.diskCleaned = r?.cleaned || 0; if (r?.success === false || r?.failedCount > 0) result.success = false })
     )
   }
 
@@ -325,24 +357,22 @@ async function quickOptimize() {
   if (optimizeSelections.memory.enabled) {
     tasks.push(
       optimizeMemory()
-        .then(r => { result.memoryFreed = (r as any)?.freedBytes || 0 })
+        .then(r => { result.memoryFreed = r?.freedBytes ?? (r?.freedMB || 0) * 1024 * 1024; if (r?.success === false) result.success = false })
     )
   }
 
   // Disable selected startup items
   if (optimizeSelections.startup.items.length > 0) {
-    const startupCount = optimizeSelections.startup.items.length
     for (const item of optimizeSelections.startup.items) {
-      tasks.push(toggleStartup(item, false))
+      tasks.push(toggleStartup(item, false).then(r => { if (r?.success !== false) result.startupDisabled++; else result.success = false }))
     }
-    result.startupDisabled = startupCount
   }
 
-  // Execute all tasks in parallel
-  await Promise.all(tasks)
-
-  // Store result for UI feedback
+  // 等待所有结果，部分失败也保留已经成功的操作记录。
+  const settled = await Promise.allSettled(tasks)
+  result.success = result.success && settled.every(r => r.status === 'fulfilled')
   lastOptimizeResult.value = result
+  trackOptimization({ ...optimizationIdentity(), optType: 'quick_optimize', optDetail: JSON.stringify({ ...result, operationCount: tasks.length }), success: result.success, errorMessage: result.success ? undefined : '部分优化未完成，请查看单项记录' })
 
   // Clear selections after completion
   optimizeSelections.disk.categories = []
@@ -403,7 +433,7 @@ async function reportDeviceInfo(systemInfo: SystemDetails) {
     if (!user) return
     const payload = {
       userCode: user.fsUserId,
-      userName: user.name,
+      userName: user?.name,
       hostname: systemInfo.hostname,
       ip: systemInfo.ip || '',
       manufacturer: systemInfo.manufacturer,
