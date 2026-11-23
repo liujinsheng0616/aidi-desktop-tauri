@@ -5,6 +5,8 @@
 
 mod report_worker;
 mod feishu;
+#[cfg(any(target_os = "windows", test))]
+mod installer_catalog;
 
 // ── Carbon 全局快捷键（macOS）────────────────────────────────────────────────
 // 使用 RegisterEventHotKey 代替 tauri-plugin-global-shortcut（后者底层用
@@ -3154,8 +3156,8 @@ struct SoftwareStatus {
 struct InstallResult {
     save_path: String,
     /// "installed" = 注册表对比确认有变化（新增或版本升级）；
-    /// "cancelled" = 注册表与安装前快照一致（用户取消/未变化，仅当安装前已存在该软件项）；
-    /// "unknown" = 无检测映射、或安装前未装且超时仍未出现（未能确认）
+    /// "unknown" = 无检测映射、或安装后注册表无可确认变化。
+    /// 同版本覆盖重装与取消安装无法仅凭注册表区分。
     final_status: String,
     version: Option<String>,
     display_name: Option<String>,
@@ -3178,7 +3180,7 @@ struct InstallProgress {
 ///
 /// ⚠️ DisplayName 候选子串基于推测，实际注册表名称可能因版本/语言不同而异。
 /// 若检测不准，行为退化为"未检测到"（等同改动前），不会误报已安装。
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const SOFTWARE_REGISTRY_MAP: &[(&str, &[&str])] = &[
     ("VNC-SERVER", &["VNC"]),
     ("WPS", &["WPS Office", "金山办公"]),
@@ -3220,65 +3222,11 @@ const SOFTWARE_REGISTRY_MAP: &[(&str, &[&str])] = &[
     // PDF转换器、工业云插件等名称过于宽泛，不配置检测，回退到 "unknown"
 ];
 
-/// 软件下载 URL 文件名子串 → 静默安装命令行参数
-///
-/// 匹配规则同 SOFTWARE_REGISTRY_MAP：URL 文件名大小写不敏感 contains 匹配。
-/// 命中后将参数列表传给安装器，实现无 GUI 静默安装。
-/// 未命中的软件不加参数（走默认行为，安装器可能弹 GUI）。
-///
-/// 常见参数：
-/// - NSIS 安装器：/S（大写 S）
-/// - Inno Setup：/VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-/// - MSI：/quiet /norestart
-/// - 部分定制安装器：/silent（非标准，不保证有效）
-#[cfg(target_os = "windows")]
-const SOFTWARE_SILENT_ARGS: &[(&str, &[&str])] = &[
-    // NSIS 安装器 (/S)
-    ("7z", &["/S"]),
-    ("WinRAR", &["/S"]),
-    ("OBS", &["/S"]),
-    ("dbeaver", &["/S"]),
-    ("FreeCAD", &["/S"]),
-    ("PotPlayer", &["/S"]),
-    ("Postman", &["/S"]),
-    ("TraeCode", &["/S"]),
-    ("Qoder", &["/S"]),
-    ("kimi", &["/S"]),
-    ("pdfgear", &["/S"]),
-    ("WorkBuddy", &["/S"]),
-    ("CADReaderPc", &["/S"]),
-    ("VisualStudioSetup", &["/S"]),
-    ("WPS", &["/S"]),
-    ("福昕PDF", &["/S"]),
-    // Inno Setup 安装器
-    ("Git.exe", &["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]),
-    // MSI 安装器 (/quiet /norestart)
-    ("teams", &["/quiet", "/norestart"]),
-    ("Zoom", &["/quiet", "/norestart"]),
-    ("CitrixWorkspace", &["/quiet", "/norestart"]),
-    ("VNC-SERVER", &["/quiet", "/norestart"]),
-    ("理光打印", &["/quiet", "/norestart"]),
-    // Chrome 安装器
-    ("ChromeSetup", &["/silent", "/install"]),
-    // 定制安装器 (/silent，非标准，不保证有效)
-    ("搜狗拼音", &["/silent"]),
-    ("搜狗 五笔", &["/silent"]),
-    ("WeChatWin", &["/silent"]),
-    ("腾讯会议", &["/silent"]),
-    ("剪映", &["/silent"]),
-    ("影刀", &["/silent"]),
-    ("豆包", &["/silent"]),
-    ("钉钉", &["/silent"]),
-    ("Foxmail", &["/silent"]),
-    ("网易有道", &["/silent"]),
-    ("飞书", &["/silent"]),
-    ("Feilian", &["/silent"]),
-];
-
 /// 根据 URL 查找该软件的注册表 DisplayName 候选子串列表
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn lookup_display_names(download_url: &str) -> Option<&'static [&'static str]> {
-    let filename = download_url.rsplit('/').next()?.to_lowercase();
+    let encoded_filename = download_url.rsplit('/').next()?.split('?').next()?;
+    let filename = urlencoding::decode(encoded_filename).ok()?.to_lowercase();
     for (url_sub, display_names) in SOFTWARE_REGISTRY_MAP {
         if filename.contains(&url_sub.to_lowercase()) {
             return Some(display_names);
@@ -3287,19 +3235,31 @@ fn lookup_display_names(download_url: &str) -> Option<&'static [&'static str]> {
     None
 }
 
-/// 根据 URL 查找该软件的静默安装参数；未命中返回空切片
-#[cfg(target_os = "windows")]
-fn lookup_silent_args(download_url: &str) -> &'static [&'static str] {
-    let Some(filename) = download_url.rsplit('/').next() else {
-        return &[];
-    };
-    let filename = filename.to_lowercase();
-    for (url_sub, args) in SOFTWARE_SILENT_ARGS {
-        if filename.contains(&url_sub.to_lowercase()) {
-            return args;
-        }
+#[cfg(any(target_os = "windows", test))]
+fn registry_change_confirmed(previous: Option<&(String, String)>, current_version: &str) -> bool {
+    match previous {
+        None => true,
+        Some((_, previous_version)) => previous_version != current_version,
     }
-    &[]
+}
+
+#[cfg(test)]
+mod installer_verification_tests {
+    use super::*;
+
+    #[test]
+    fn encoded_chinese_filename_uses_existing_registry_mapping() {
+        let url = url::Url::parse("http://10.149.5.210/windows/腾讯会议.exe").unwrap();
+        assert_eq!(lookup_display_names(url.as_str()), Some(&["腾讯会议", "WeMeeting", "Tencent Meeting"][..]));
+    }
+
+    #[test]
+    fn same_version_reinstall_is_not_confirmed() {
+        let previous = ("WeChat".to_string(), "1.0".to_string());
+        assert!(!registry_change_confirmed(Some(&previous), "1.0"));
+        assert!(registry_change_confirmed(Some(&previous), "1.1"));
+        assert!(registry_change_confirmed(None, "1.0"));
+    }
 }
 
 /// 通过 PowerShell 查询注册表 Uninstall 项，检测指定 DisplayName 子串的软件
@@ -3373,6 +3333,7 @@ fn check_software_installed(download_url: String) -> Result<SoftwareStatus, Stri
 
     #[cfg(target_os = "windows")]
     {
+        installer_catalog::validate_installer_url(&download_url)?;
         let display_names = match lookup_display_names(&download_url) {
             Some(names) => names,
             None => return Ok(SoftwareStatus { installed: false, version: None, display_name: None }),
@@ -3403,10 +3364,8 @@ fn check_software_installed(download_url: String) -> Result<SoftwareStatus, Stri
 /// （启动器型安装程序如腾讯会议，派生真实安装进程后立即退出，退出码无意义，
 ///  原实现会误报"安装完成"）。改为轮询注册表 Uninstall 项确认。
 ///
-/// 问题 3 修复（方案 A）：覆盖重装时用户取消安装，旧版注册表项仍存在，
-/// 轮询立刻命中旧项 → 误报"安装完成"。改为安装前拍注册表快照，安装后对比：
-/// 从无到有或版本号变化 → installed；与快照一致 → cancelled（用户取消/未变化）；
-/// 无检测映射或安装前未装且超时 → unknown。
+/// 覆盖重装时旧注册表项仍存在，安装前后仅凭版本号无法区分同版本重装与取消。
+/// 只有从无到有或版本号变化才确认成功；无变化统一返回 unknown。
 #[tauri::command]
 async fn download_and_install_software(
     app: tauri::AppHandle,
@@ -3421,14 +3380,22 @@ async fn download_and_install_software(
 
     #[cfg(target_os = "windows")]
     {
+        use std::io::{Read, Write};
+
+        // AI 回复中的 install: 地址不可信；执行前必须命中应用内固定清单。
+        let approved_url = installer_catalog::validate_installer_url(&download_url)?;
         let tmp_dir = std::env::temp_dir();
-        // 从 URL 中提取文件名，fallback 用时间戳
-        let file_name = download_url
-            .rsplit('/')
-            .next()
-            .unwrap_or("software_installer")
-            .to_string();
-        let save_path = tmp_dir.join(format!("aidi-software-{}", file_name));
+        let encoded_file_name = approved_url.path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .ok_or("无效的安装包文件名")?;
+        let file_name = urlencoding::decode(encoded_file_name)
+            .map_err(|_| "无效的安装包文件名".to_string())?;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("生成临时文件名失败: {e}"))?
+            .as_nanos();
+        let save_path = tmp_dir.join(format!("aidi-software-{nonce}-{file_name}"));
+        let partial_path = save_path.with_extension("download");
 
         // 下载（async，不阻塞运行时），加 5 分钟超时避免网络问题永久挂起
         let _ = app.emit("install-progress", InstallProgress {
@@ -3437,16 +3404,51 @@ async fn download_and_install_software(
         });
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-        let resp = client.get(&download_url).send()
+        let mut resp = client.get(approved_url).send()
             .await
             .map_err(|e| format!("下载失败: {}", e))?;
-        let bytes = resp.bytes()
-            .await
-            .map_err(|e| format!("读取下载内容失败: {}", e))?;
-        std::fs::write(&save_path, &bytes)
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("下载安装包失败，HTTP 状态: {}", resp.status()));
+        }
+        const MAX_INSTALLER_BYTES: u64 = 1024 * 1024 * 1024;
+        if resp.content_length().is_some_and(|length| length > MAX_INSTALLER_BYTES) {
+            return Err("安装包超过 1GB 限制".to_string());
+        }
+        let download_result: Result<(), String> = async {
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial_path)
+                .map_err(|e| format!("创建安装包文件失败: {e}"))?;
+            let mut downloaded = 0_u64;
+            while let Some(chunk) = resp.chunk().await.map_err(|e| format!("读取下载内容失败: {e}"))? {
+                downloaded += chunk.len() as u64;
+                if downloaded > MAX_INSTALLER_BYTES {
+                    return Err("安装包超过 1GB 限制".to_string());
+                }
+                file.write_all(&chunk).map_err(|e| format!("写入安装包失败: {e}"))?;
+            }
+            if downloaded == 0 {
+                return Err("下载的安装包为空".to_string());
+            }
+            file.flush().map_err(|e| format!("保存安装包失败: {e}"))?;
+            drop(file);
+            // 清单中的文件都应为 Windows EXE，避免把返回 200 的错误页当安装包执行。
+            let mut header = [0_u8; 2];
+            std::fs::File::open(&partial_path)
+                .and_then(|mut file| file.read_exact(&mut header))
+                .map_err(|e| format!("读取安装包文件头失败: {e}"))?;
+            if header != *b"MZ" {
+                return Err("下载内容不是 Windows 安装程序".to_string());
+            }
+            Ok(())
+        }.await;
+        if let Err(error) = download_result {
+            let _ = std::fs::remove_file(&partial_path);
+            return Err(error);
+        }
+        std::fs::rename(&partial_path, &save_path)
+            .map_err(|e| format!("保存安装包失败: {e}"))?;
 
         // 启动安装包 + 等待 + 轮询注册表全部是阻塞操作，
         // 放入 spawn_blocking 避免阻塞 tokio 异步运行时。
@@ -3455,8 +3457,6 @@ async fn download_and_install_software(
         let result = tokio::task::spawn_blocking(move || -> Result<InstallResult, String> {
             // 先查检测映射，用于安装前拍快照
             let display_names = lookup_display_names(&download_url_for_poll);
-            // 查静默安装参数
-            let silent_args = lookup_silent_args(&download_url_for_poll);
 
             // 通知前端：正在检测已装版本
             let _ = app_clone.emit("install-progress", InstallProgress {
@@ -3479,12 +3479,8 @@ async fn download_and_install_software(
                 download_url: download_url_for_poll.clone(),
             });
 
-            // 启动安装包（带静默参数，实现无 GUI 安装）
-            let mut cmd = std::process::Command::new(&save_path);
-            if !silent_args.is_empty() {
-                cmd.args(silent_args);
-            }
-            let mut child = cmd
+            // 未经逐款验证的静默参数已移除，使用安装包自身的交互流程。
+            let mut child = std::process::Command::new(&save_path)
                 .spawn()
                 .map_err(|e| {
                     // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
@@ -3520,18 +3516,18 @@ async fn download_and_install_software(
                 download_url: download_url_for_poll.clone(),
             });
 
-            // 轮询注册表，最长 5 分钟。只有相对快照发生变化才确认安装成功。
-            // 从无到有、或版本号变化 → installed；版本和快照一致 → 继续轮询（用户可能取消了）。
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            // 已装软件的同版本重装无法用注册表版本确认；最多等待 60 秒后给出不确定结果。
+            // 首次安装仍等待最多 5 分钟，兼容启动器派生的安装进程。
+            let verify_seconds = if had_prior_install { 60 } else { 300 };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(verify_seconds);
             loop {
                 if std::time::Instant::now() >= deadline {
-                    // 超时分流：安装前已装但无变化 → cancelled；安装前未装且未出现 → unknown
+                    // 同版本重装成功与用户取消都可能无变化，不能推断为“已取消”。
                     if had_prior_install {
-                        // 填快照里的旧版本，供前端显示"可能已取消 v<旧版>"
                         let (prev_dn, prev_ver) = snapshot.iter().flatten().next().cloned().unwrap_or_default();
                         return Ok(InstallResult {
                             save_path: save_path_str,
-                            final_status: "cancelled".to_string(),
+                            final_status: "unknown".to_string(),
                             version: if prev_ver.is_empty() { None } else { Some(prev_ver) },
                             display_name: if prev_dn.is_empty() { None } else { Some(prev_dn) },
                         });
@@ -3545,10 +3541,7 @@ async fn download_and_install_software(
                 }
                 for (i, name) in names.iter().enumerate() {
                     if let Some((dn, ver)) = check_installed_via_powershell(name) {
-                        let changed = match &snapshot[i] {
-                            None => true,                                  // 从无到有
-                            Some((_, prev_ver)) => prev_ver != &ver,      // 版本升级
-                        };
+                        let changed = registry_change_confirmed(snapshot[i].as_ref(), &ver);
                         if changed {
                             return Ok(InstallResult {
                                 save_path: save_path_str,

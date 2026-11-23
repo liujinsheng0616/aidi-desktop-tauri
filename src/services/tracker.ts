@@ -62,7 +62,7 @@ export interface OptimizationData {
 }
 
 // 每条记录独立持久化，避免多个窗口覆盖同一队列；收到数据库确认后才删除。
-const BASE = import.meta.env.VITE_TRACKER_BASE_URL || 'http://localhost:3000'
+const BASE = import.meta.env.VITE_TRACKER_BASE_URL || 'http://localhost:46291'
 const PREFIX = 'aidi-outbox-v2:'
 let timer: ReturnType<typeof setInterval> | null = null
 let flushing = false
