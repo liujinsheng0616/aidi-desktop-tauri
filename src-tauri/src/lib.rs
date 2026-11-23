@@ -3155,7 +3155,9 @@ struct SoftwareStatus {
 #[derive(serde::Serialize)]
 struct InstallResult {
     save_path: String,
+    silent_attempted: bool,
     /// "installed" = 注册表对比确认有变化（新增或版本升级）；
+    /// "silent_failed" = 已验证的静默模式返回失败，未自动再次运行安装包；
     /// "unknown" = 无检测映射、或安装后注册表无可确认变化。
     /// 同版本覆盖重装与取消安装无法仅凭注册表区分。
     final_status: String,
@@ -3167,11 +3169,15 @@ struct InstallResult {
 #[cfg(target_os = "windows")]
 #[derive(serde::Serialize, Clone)]
 struct InstallProgress {
-    /// "downloading" | "checking" | "installing" | "verifying"
+    /// "downloading" | "checking" | "authorizing" | "installing" | "verifying"
     stage: String,
     /// 下载 URL，前端用来匹配对应按钮（防止并发安装时事件串台）
     download_url: String,
+    silent: bool,
 }
+
+#[cfg(target_os = "windows")]
+mod installer_elevation;
 
 /// 软件下载 URL 文件名子串 → 注册表 DisplayName 候选子串列表
 ///
@@ -3370,11 +3376,13 @@ fn check_software_installed(download_url: String) -> Result<SoftwareStatus, Stri
 async fn download_and_install_software(
     app: tauri::AppHandle,
     download_url: String,
+    force_interactive: Option<bool>,
 ) -> Result<InstallResult, String> {
     #[cfg(target_os = "macos")]
     {
         let _ = &download_url;
         let _ = &app;
+        let _ = &force_interactive;
         return Err("这些软件安装包均为 Windows 版本，无法在 macOS 上运行，请在 Windows 电脑上使用此功能".to_string());
     }
 
@@ -3383,7 +3391,9 @@ async fn download_and_install_software(
         use std::io::{Read, Write};
 
         // AI 回复中的 install: 地址不可信；执行前必须命中应用内固定清单。
-        let approved_url = installer_catalog::validate_installer_url(&download_url)?;
+        let (approved_url, configured_mode) = installer_catalog::installer_for_url(&download_url)?;
+        let silent_args = installer_catalog::silent_args(configured_mode, force_interactive.unwrap_or(false));
+        let silent_attempt = silent_args.is_some();
         let tmp_dir = std::env::temp_dir();
         let encoded_file_name = approved_url.path_segments()
             .and_then(|mut segments| segments.next_back())
@@ -3401,6 +3411,7 @@ async fn download_and_install_software(
         let _ = app.emit("install-progress", InstallProgress {
             stage: "downloading".to_string(),
             download_url: download_url.clone(),
+            silent: silent_attempt,
         });
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
@@ -3462,6 +3473,7 @@ async fn download_and_install_software(
             let _ = app_clone.emit("install-progress", InstallProgress {
                 stage: "checking".to_string(),
                 download_url: download_url_for_poll.clone(),
+                silent: silent_attempt,
             });
 
             // 安装前拍快照：记录每个候选名的注册表状态。
@@ -3477,26 +3489,47 @@ async fn download_and_install_software(
             let _ = app_clone.emit("install-progress", InstallProgress {
                 stage: "installing".to_string(),
                 download_url: download_url_for_poll.clone(),
+                silent: silent_attempt,
             });
 
-            // 未经逐款验证的静默参数已移除，使用安装包自身的交互流程。
-            let mut child = std::process::Command::new(&save_path)
-                .spawn()
-                .map_err(|e| {
-                    // Windows 错误码 740 = 需要管理员权限但 UAC 被拒绝
-                    if e.raw_os_error() == Some(740) {
-                        "安装需要管理员权限，UAC 被拒绝或未弹出，请右键安装包以管理员身份运行".to_string()
-                    } else {
-                        format!("打开安装包失败: {}", e)
-                    }
-                })?;
+            let mut command = std::process::Command::new(&save_path);
+            if let Some(args) = silent_args { command.args(args); }
+            let exit_code = match command.spawn() {
+                Ok(mut child) => {
+                    // 启动器型安装程序可能派生子进程；退出码只用于识别静默失败。
+                    child.wait().map_err(|e| format!("等待安装程序退出失败: {e}"))?.code()
+                }
+                Err(e) if e.raw_os_error() == Some(740) => {
+                    let _ = app_clone.emit("install-progress", InstallProgress {
+                        stage: "authorizing".to_string(),
+                        download_url: download_url_for_poll.clone(),
+                        silent: silent_attempt,
+                    });
+                    let elevated_code = installer_elevation::run_installer_as_admin(&save_path, silent_args.unwrap_or(&[]))?;
+                    let _ = app_clone.emit("install-progress", InstallProgress {
+                        stage: "installing".to_string(),
+                        download_url: download_url_for_poll.clone(),
+                        silent: silent_attempt,
+                    });
+                    elevated_code.map(|code| code as i32)
+                }
+                Err(e) if silent_attempt && e.raw_os_error() != Some(740) => {
+                    return Ok(InstallResult {
+                        save_path: save_path.to_string_lossy().to_string(),
+                        silent_attempted: silent_attempt,
+                        final_status: "silent_failed".to_string(),
+                        version: None,
+                        display_name: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(format!("打开安装包失败: {e}"));
+                }
+            };
 
-            // 等待启动的进程退出。
-            // 单进程安装程序：阻塞到用户完成或取消；
-            // 启动器型安装程序：派生真实安装进程后立即退出，wait 很快返回。
-            // 注意：不使用退出码判断成功——改为下面的注册表快照对比（方案 A）。
-            let _exit_status = child.wait()
-                .map_err(|e| format!("等待安装程序退出失败: {}", e))?;
+            // 仅把非零退出码作为静默参数可能不被支持的信号；0 不单独证明安装成功。
+            // MSI 的 3010 表示需要重启，仍继续由注册表确认。
+            let silent_exit_failed = silent_attempt && matches!(exit_code, Some(code) if code != 0 && code != 3010);
 
             let save_path_str = save_path.to_string_lossy().to_string();
 
@@ -3504,7 +3537,8 @@ async fn download_and_install_software(
             let Some(names) = display_names else {
                 return Ok(InstallResult {
                     save_path: save_path_str,
-                    final_status: "unknown".to_string(),
+                    silent_attempted: silent_attempt,
+                    final_status: if silent_exit_failed { "silent_failed" } else { "unknown" }.to_string(),
                     version: None,
                     display_name: None,
                 });
@@ -3514,19 +3548,30 @@ async fn download_and_install_software(
             let _ = app_clone.emit("install-progress", InstallProgress {
                 stage: "verifying".to_string(),
                 download_url: download_url_for_poll.clone(),
+                silent: silent_attempt,
             });
 
             // 已装软件的同版本重装无法用注册表版本确认；最多等待 60 秒后给出不确定结果。
             // 首次安装仍等待最多 5 分钟，兼容启动器派生的安装进程。
-            let verify_seconds = if had_prior_install { 60 } else { 300 };
+            let verify_seconds = if silent_exit_failed { 6 } else if had_prior_install { 60 } else { 300 };
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(verify_seconds);
             loop {
                 if std::time::Instant::now() >= deadline {
+                    if silent_exit_failed {
+                        return Ok(InstallResult {
+                            save_path: save_path_str,
+                            silent_attempted: silent_attempt,
+                            final_status: "silent_failed".to_string(),
+                            version: None,
+                            display_name: None,
+                        });
+                    }
                     // 同版本重装成功与用户取消都可能无变化，不能推断为“已取消”。
                     if had_prior_install {
                         let (prev_dn, prev_ver) = snapshot.iter().flatten().next().cloned().unwrap_or_default();
                         return Ok(InstallResult {
                             save_path: save_path_str,
+                            silent_attempted: silent_attempt,
                             final_status: "unknown".to_string(),
                             version: if prev_ver.is_empty() { None } else { Some(prev_ver) },
                             display_name: if prev_dn.is_empty() { None } else { Some(prev_dn) },
@@ -3534,6 +3579,7 @@ async fn download_and_install_software(
                     }
                     return Ok(InstallResult {
                         save_path: save_path_str,
+                        silent_attempted: silent_attempt,
                         final_status: "unknown".to_string(),
                         version: None,
                         display_name: None,
@@ -3545,6 +3591,7 @@ async fn download_and_install_software(
                         if changed {
                             return Ok(InstallResult {
                                 save_path: save_path_str,
+                                silent_attempted: silent_attempt,
                                 final_status: "installed".to_string(),
                                 version: if ver.is_empty() { None } else { Some(ver) },
                                 display_name: Some(dn),
@@ -3565,6 +3612,7 @@ async fn download_and_install_software(
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = &download_url;
+        let _ = &force_interactive;
         Err("当前操作系统不支持软件安装功能".to_string())
     }
 }
