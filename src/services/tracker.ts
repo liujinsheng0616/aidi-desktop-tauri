@@ -120,31 +120,23 @@ async function flush() {
 function retry() { void flush().catch(error => console.warn('[tracker]', error)) }
 export function initTracker() {
   if (timer) return
-  try {
-    // 兼容旧事件队列；迁移完成后才删除旧键。
-    const legacy = localStorage.getItem('aidi-track-queue')
-    if (legacy) {
-      const events = JSON.parse(legacy)
-      if (Array.isArray(events)) {
-        events.forEach((e, index) => {
-          const id = e.eventId || 'legacy-' + index + '-' + hash(legacy)
-          localStorage.setItem(PREFIX + id, JSON.stringify({ endpoint: '/api/events/batch', body: { events: [{ ...e, eventId: id }] } }))
-        })
-        localStorage.removeItem('aidi-track-queue')
-      }
-    }
-  } catch (error) { console.warn('[tracker] 旧数据迁移失败，已保留', error) }
   timer = setInterval(retry, 10000)
   window.addEventListener('online', retry)
   // 不使用无法确认写库结果的 sendBeacon；未确认记录留待下次启动补发。
   retry()
 }
-function hash(value: string) { let h = 0; for (let i = 0; i < value.length; i++) h = ((h << 5) - h + value.charCodeAt(i)) | 0; return h.toString(16) }
 function enqueue(endpoint: string, data: Record<string, unknown>, event = false) {
   try {
     initTracker()
     const id = crypto.randomUUID()
-    const body = { ...(event || endpoint === '/api/optimizations' ? { deviceId: localStorage.getItem('aidi-device-serial') || undefined } : {}), ...data, userId: data.userId && data.userId !== 'anonymous' ? data.userId : getTrackingUserId(), ...(event ? { eventId: id, occurredAt: new Date().toISOString() } : { reportId: id }) }
+    const optimization = endpoint === '/api/optimizations'
+    const body = {
+      ...(event || optimization ? { deviceId: localStorage.getItem('aidi-device-serial') || undefined } : {}),
+      ...data,
+      userId: data.userId && data.userId !== 'anonymous' ? data.userId : getTrackingUserId(),
+      ...(event ? { eventId: id } : { reportId: id }),
+      ...(event || optimization || endpoint === '/api/conversations' ? { occurredAt: new Date().toISOString() } : {}),
+    }
     localStorage.setItem(PREFIX + id, JSON.stringify({ endpoint, body: event ? { events: [body] } : body }))
     retry()
   } catch (error) { console.warn('[tracker] 无法持久化上报数据', error) }
