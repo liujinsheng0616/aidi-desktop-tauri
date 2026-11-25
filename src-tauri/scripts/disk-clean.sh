@@ -133,77 +133,50 @@ if contains "prefetch"; then
     fi
 fi
 
-# Empty trash (recycleBin) - macOS TCC 隐私保护阻止 bash 直接访问 ~/.Trash
-# 改用 AppleScript 调用 Finder 清空废纸篓（Finder 有系统级权限）
+# Finder can clear trash across volumes. Verify the result independently of its command status.
 if contains "recycleBin"; then
-    if [ -d "$HOME/.Trash" ]; then
-        # 用 AppleScript 获取清空前每个文件的名称和大小
-        trash_items=$(osascript -e '
-        tell application "Finder"
-            set output to ""
-            set items_list to every item of trash
-            repeat with f in items_list
-                try
-                    set fname to name of f
-                    set fsize to (physical size of f) as string
-                    set output to output & fname & tab & fsize & linefeed
-                end try
-            end repeat
-            return output
-        end tell' 2>/dev/null)
+    script_dir=$(dirname "$0")
+    . "$script_dir/trash-stats.sh"
+    if ! trash_snapshot details; then
+        failed_count=$((failed_count + 1))
+        add_detail "recycleBin" "废纸篓" 0 "failed" "无法读取废纸篓，请检查 Finder 自动化权限"
+    elif [ "$trash_items_count" -gt 0 ]; then
+        trash_before_bytes=$trash_bytes
+        trash_before_count=$trash_items_count
+        trash_before_details=$trash_details
+        /usr/bin/osascript -e 'with timeout of 10 seconds
+            tell application "Finder" to empty trash
+            end timeout' >/dev/null 2>&1
+        empty_status=$?
 
-        trash_size_before=0
-        trash_count_before=0
-        if [ -n "$trash_items" ]; then
-            while IFS=$'\t' read -r fname fsize; do
-                [ -z "$fname" ] && continue
-                fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
-                trash_size_before=$((trash_size_before + fsize))
-                trash_count_before=$((trash_count_before + 1))
-            done <<< "$trash_items"
-        fi
-
-        if [ "$trash_count_before" -gt 0 ]; then
-            # 用 AppleScript 清空废纸篓
-            osascript -e 'tell application "Finder" to empty trash' 2>/dev/null
-            # 等待清空完成（empty trash 是异步的）
-            sleep 2
-
-            # 检查清空后剩余大小
-            osascript_after=$(osascript -e '
-            tell application "Finder"
-                set total to 0
-                set items_list to every item of trash
-                repeat with f in items_list
-                    try
-                        set total to total + (physical size of f)
-                    end try
-                end repeat
-                return total as string
-            end tell' 2>/dev/null)
-            if [ -n "$osascript_after" ]; then
-                trash_size_after=$(echo "$osascript_after" | awk '{printf "%.0f", $1}')
+        trash_verified=false
+        for attempt in 1 2 3 4 5; do
+            if trash_snapshot; then
+                trash_verified=true
+                [ "$trash_items_count" -eq 0 ] && break
             else
-                trash_size_after=0
+                trash_verified=false
+                break
             fi
+            [ "$attempt" -lt 5 ] && sleep 1
+        done
 
-            actual_cleaned=$((trash_size_before - trash_size_after))
-            if [ "$actual_cleaned" -gt 0 ]; then
-                cleaned=$((cleaned + actual_cleaned))
-                success_count=$((success_count + trash_count_before))
-                # 逐个文件添加明细
-                while IFS=$'\t' read -r fname fsize; do
-                    [ -z "$fname" ] && continue
-                    fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
-                    add_detail "recycleBin" "$fname" "$fsize" "success" ""
-                done <<< "$trash_items"
+        if [ "$trash_verified" = true ] && [ "$trash_items_count" -eq 0 ]; then
+            cleaned=$((cleaned + trash_before_bytes))
+            success_count=$((success_count + trash_before_count))
+            while IFS=$'\t' read -r item_size item_name; do
+                [ -z "$item_name" ] && continue
+                item_size=$(printf '%s\n' "$item_size" | awk '{printf "%.0f", $1}')
+                add_detail "recycleBin" "$item_name" "$item_size" "success" ""
+            done <<< "$trash_before_details"
+        else
+            failed_count=$((failed_count + 1))
+            if [ "$trash_verified" != true ]; then
+                add_detail "recycleBin" "废纸篓" 0 "failed" "无法验证清理结果，请在 Finder 中检查"
+            elif [ "$empty_status" -ne 0 ]; then
+                add_detail "recycleBin" "废纸篓" "$trash_bytes" "failed" "Finder 清空未完成，请在 Finder 中检查"
             else
-                failed_count=$((failed_count + trash_count_before))
-                while IFS=$'\t' read -r fname fsize; do
-                    [ -z "$fname" ] && continue
-                    fsize=$(echo "$fsize" | awk '{printf "%.0f", $1}')
-                    add_detail "recycleBin" "$fname" "$fsize" "failed" "清空废纸篓失败"
-                done <<< "$trash_items"
+                add_detail "recycleBin" "废纸篓" "$trash_bytes" "failed" "仍有项目留在废纸篓，请在 Finder 中检查"
             fi
         fi
     fi

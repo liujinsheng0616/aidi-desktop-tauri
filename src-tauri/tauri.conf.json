@@ -67,6 +67,7 @@
     "resources": ["scripts/*", "icons/tray-icon.png"],
     "macOS": {
       "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist",
       "signingIdentity": "-"
     },
     "windows": {

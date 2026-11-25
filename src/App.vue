@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import FloatingBall from './components/FloatingBall.vue'
 import QuickInputBox from './components/QuickInputBox.vue'
-import { isLoggedIn, getUser, clearAuth } from './stores/auth'
+import { getUser, clearAuth } from './stores/auth'
 import { colorThemes } from './shared/colorThemes'
 
 const ballSize = ref(60)
@@ -70,18 +70,21 @@ async function handleInputHeightChange(height: number) {
 function loadSettings() {
   const saved = localStorage.getItem('aidi-settings')
   if (saved) {
-    const s = JSON.parse(saved)
-    ballSize.value = s.ballSize || 60
-    opacity.value = s.opacity ?? 100
-    colorTheme.value = s.colorTheme || 'cyan-purple'
+    try {
+      const s = JSON.parse(saved)
+      ballSize.value = s.ballSize || 60
+      opacity.value = s.opacity ?? 100
+      colorTheme.value = s.colorTheme || 'cyan-purple'
+    } catch {
+      // settings 损坏时回退默认值
+    }
   }
 }
 
 // 登录完成后的初始化逻辑（供 Rust 端调用）
 async function handleLoginComplete() {
-  await invoke('update_login_status', { isLoggedIn: true })
+  if (!await invoke<boolean>('update_login_status', { isLoggedIn: true })) return
   await initApp()
-  await syncAuthToBackend()
 }
 
 // 暴露全局函数供 Rust 调用
@@ -117,7 +120,7 @@ async function initApp() {
 
 // 监听 localStorage 变化（跨标签页同步或手动删除时触发）
 async function handleStorageChange(e: StorageEvent) {
-  if (e.key === 'aidi-user' && !e.newValue && isLoggedIn()) {
+  if (e.key === 'aidi-user' && !e.newValue && initialized.value) {
     // aidi-user 被删除，彻底清除登录状态并显示登录窗口
     await clearAuth()
     await invoke('show_login_window')
@@ -126,6 +129,7 @@ async function handleStorageChange(e: StorageEvent) {
 
 // 暴露全局登出函数（可在控制台调用：await __aidiLogout()）
 async function globalLogout() {
+  initialized.value = false
   await clearAuth()
   await invoke('show_login_window')
   console.log('已登出，显示登录窗口')
@@ -170,33 +174,15 @@ onMounted(async () => {
   })
 
   // 监听登录完成事件
-  listen('login-complete', async () => {
-    await invoke('close_login_window')
-    // 登录成功后更新托盘菜单状态
-    await invoke('update_login_status', { isLoggedIn: true })
-    await initApp()
-    // 登录完成后同步认证信息到后端
-    await syncAuthToBackend()
-  })
+  listen('login-complete', handleLoginComplete)
 
   // 监听输入框展开翻转事件：球靠近右边缘时翻转布局
   listen('input-expanded-flip', (event: any) => {
     isFlipped.value = event.payload as boolean
   })
 
-  // 监听 Rust 超时线程的重新检查请求（处理 Windows 上 WebView2 慢初始化场景）
-  listen('request-login-check', async () => {
-    if (initialized.value) return  // 已初始化，跳过
-    const loggedIn = isLoggedIn()
-    await invoke('update_login_status', { isLoggedIn: loggedIn })
-    if (loggedIn) {
-      await initApp()
-    } else {
-      await invoke('show_login_window')
-    }
-  })
-
   // 从 Rust 端读取持久化的登录信息，恢复到 localStorage
+  let restored = false
   try {
     const loginInfo = await invoke<{ user: string | Record<string, unknown> | null } | null>('get_login_info')
     if (loginInfo?.user) {
@@ -209,25 +195,21 @@ onMounted(async () => {
       } else if (typeof loginInfo.user === 'object') {
         user = loginInfo.user as Record<string, unknown>
       }
-      if (user && user.id) {
+      if (user) {
         localStorage.setItem('aidi-user', JSON.stringify(user))
+        restored = true
       }
-    } else {
-      // auth.json 不存在或为空，清除 localStorage 残留（退出时清理的兜底）
-      localStorage.removeItem('aidi-user')
-      localStorage.removeItem('aidi-token')
     }
   } catch (e) {
     console.warn('读取登录信息失败:', e)
   }
 
-  const loggedIn = isLoggedIn()
-  // 应用启动时同步登录状态到 Rust 端（用于托盘菜单显示）
-  await invoke('update_login_status', { isLoggedIn: loggedIn })
-
+  const loggedIn = await invoke<boolean>('update_login_status', { isLoggedIn: restored })
   if (loggedIn) {
     await initApp()
   } else {
+    localStorage.removeItem('aidi-user')
+    localStorage.removeItem('aidi-token')
     await invoke('show_login_window')
   }
 })

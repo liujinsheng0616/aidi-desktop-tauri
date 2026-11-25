@@ -22,6 +22,9 @@ export interface FeishuUserInfo {
   mobile: string | null
   gender: number | null
   jobNumber: string | null
+  employee_no?: string | null
+  user_id?: string | null
+  open_id?: string | null
   position: string | null
   accessToken: string | null
 }
@@ -60,14 +63,14 @@ export async function feishuLogin(code: string): Promise<FeishuUserInfo> {
  */
 export function convertFeishuUser(feishuUser: FeishuUserInfo): UserInfo {
   return {
-    id: feishuUser.userId || feishuUser.openId || '',
+    id: feishuUser.userId || feishuUser.user_id || feishuUser.openId || feishuUser.open_id || '',
     name: feishuUser.name || '',
     nickName: feishuUser.name || '',
     headImgUrl: '',
     mobile: feishuUser.mobile || '',
-    username: feishuUser.email || feishuUser.jobNumber || '',
+    username: feishuUser.email || feishuUser.jobNumber || feishuUser.employee_no || '',
     type: 'feishu',
-    fsUserId: feishuUser.jobNumber,  // 使用员工工号
+    fsUserId: feishuUser.jobNumber || feishuUser.employee_no || null,
   }
 }
 

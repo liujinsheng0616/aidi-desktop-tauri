@@ -13,68 +13,108 @@ $result = @{
     message = ""
 }
 
+function Move-StartupRegistryValue($from, $to, [string]$name) {
+    if ($from.GetValueNames() -notcontains $name) {
+        throw "Startup entry not found: $name"
+    }
+
+    $options = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    $value = $from.GetValue($name, $null, $options)
+    $kind = $from.GetValueKind($name)
+    if ($null -eq $value) {
+        throw "Cannot back up this registry value: $name"
+    }
+    if ($to.GetValueNames() -contains $name) {
+        $existing = $to.GetValue($name, $null, $options)
+        if ($to.GetValueKind($name) -ne $kind -or
+            (ConvertTo-Json -InputObject $existing -Compress) -cne (ConvertTo-Json -InputObject $value -Compress)) {
+            throw "A different startup entry with this name already exists: $name"
+        }
+    } else {
+        $to.SetValue($name, $value, $kind)
+    }
+
+    # Keep the source until the destination has been saved, including after a retry.
+    $to.Flush()
+    $from.DeleteValue($name, $true)
+}
+
+$mutex = $null
+$locked = $false
 try {
     $item = $ItemJson | ConvertFrom-Json
 
     $name = $item.name
-    $location = $item.location
     $enabled = $item.enabled
     $command = $item.command
     $source = $item.source
 
+    if ($source -in @("HKCU_Run", "StartupFolder")) {
+        if ($enabled -isnot [bool]) {
+            throw "Invalid startup state"
+        }
+        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $mutex = [System.Threading.Mutex]::new($false, "Local\AIDI-Startup-$sid")
+        try {
+            $locked = $mutex.WaitOne(5000)
+        } catch [System.Threading.AbandonedMutexException] {
+            $locked = $true
+        }
+        if (!$locked) {
+            throw "Another startup operation is still running"
+        }
+    }
+
     switch ($source) {
         "HKCU_Run" {
-            $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-            if ($enabled) {
-                # Re-enable: restore the registry value
-                if ($command) {
-                    Set-ItemProperty -Path $regPath -Name $name -Value $command
-                    $result.success = $true
-                    $result.message = "Enabled startup item: $name"
-                }
-            } else {
-                # Disable: remove from registry (backup value is in $command)
-                Remove-ItemProperty -Path $regPath -Name $name -ErrorAction SilentlyContinue
-                $result.success = $true
-                $result.message = "Disabled startup item: $name"
+            if ([string]::IsNullOrEmpty($name)) {
+                throw "Missing startup entry name"
             }
-        }
-        "HKLM_Run" {
-            $regPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
-            if ($enabled) {
-                if ($command) {
-                    Set-ItemProperty -Path $regPath -Name $name -Value $command
-                    $result.success = $true
-                    $result.message = "Enabled startup item: $name"
+            $registry = [Microsoft.Win32.Registry]::CurrentUser
+            $runKey = $null
+            $backupKey = $null
+            try {
+                $runKey = $registry.CreateSubKey("Software\Microsoft\Windows\CurrentVersion\Run")
+                $backupKey = $registry.CreateSubKey("Software\AIDI\DisabledStartup\Run")
+                if ($enabled) {
+                    Move-StartupRegistryValue $backupKey $runKey $name
+                } else {
+                    Move-StartupRegistryValue $runKey $backupKey $name
                 }
-            } else {
-                Remove-ItemProperty -Path $regPath -Name $name -ErrorAction SilentlyContinue
-                $result.success = $true
-                $result.message = "Disabled startup item: $name"
+            } finally {
+                if ($runKey) { $runKey.Dispose() }
+                if ($backupKey) { $backupKey.Dispose() }
+                $registry.Dispose()
             }
+            $result.success = $true
+            $result.message = if ($enabled) { "Restored startup item: $name" } else { "Disabled startup item: $name" }
         }
         "StartupFolder" {
-            $path = $command
-            if ($enabled) {
-                # Can't easily re-enable a deleted shortcut
-                $result.success = $false
-                $result.message = "Cannot re-enable startup folder items"
-            } else {
-                if (Test-Path $path) {
-                    # Move to a disabled folder instead of deleting
-                    $disabledFolder = "$env:APPDATA\AIDI\DisabledStartup"
-                    if (!(Test-Path $disabledFolder)) {
-                        New-Item -ItemType Directory -Path $disabledFolder -Force | Out-Null
-                    }
-                    Move-Item -Path $path -Destination $disabledFolder -Force
-                    $result.success = $true
-                    $result.message = "Disabled startup item: $name"
-                }
+            $startupFolder = [Environment]::GetFolderPath(
+                [Environment+SpecialFolder]::Startup, [Environment+SpecialFolderOption]::DoNotVerify)
+            $disabledFolder = Join-Path $env:APPDATA "AIDI\DisabledStartup"
+            if (!$startupFolder -or !$command) {
+                throw "Startup folder or shortcut path not found"
             }
+            $activePath = [IO.Path]::GetFullPath($command)
+            $fileName = [IO.Path]::GetFileName($activePath)
+            if (!$fileName -or $fileName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+                [IO.Path]::GetDirectoryName($activePath) -ne $startupFolder) {
+                throw "Item is outside the current user's startup folder"
+            }
+            $backupPath = Join-Path $disabledFolder $fileName
+            if ($enabled) {
+                [void][IO.Directory]::CreateDirectory($startupFolder)
+                [IO.File]::Move($backupPath, $activePath)
+            } else {
+                [void][IO.Directory]::CreateDirectory($disabledFolder)
+                [IO.File]::Move($activePath, $backupPath)
+            }
+            $result.success = $true
+            $result.message = if ($enabled) { "Restored startup item: $name" } else { "Disabled startup item: $name" }
         }
-        "AllUsersStartup" {
-            $result.success = $false
-            $result.message = "Modifying All Users startup requires administrator privileges"
+        { $_ -in @("AllUsersStartup", "HKLM_Run") } {
+            $result.message = "Manage system-wide startup items in Windows settings"
         }
         default {
             $result.success = $false
@@ -84,6 +124,9 @@ try {
 } catch {
     $result.success = $false
     $result.message = $_.Exception.Message
+} finally {
+    if ($locked) { $mutex.ReleaseMutex() }
+    if ($mutex) { $mutex.Dispose() }
 }
 
 $result | ConvertTo-Json -Compress
