@@ -63,17 +63,22 @@ export interface OptimizationData {
 
 // 每条记录独立持久化，避免多个窗口覆盖同一队列；收到数据库确认后才删除。
 const BASE = import.meta.env.VITE_TRACKER_BASE_URL || 'http://localhost:1367'
-const PREFIX = 'aidi-outbox-v2:'
+const FAIDI_ORIGIN = 'https://faidi.yadea.com:1367'
+const useFaidi = BASE === FAIDI_ORIGIN
+const queueVersion = useFaidi ? 'faidi-v1' : 'v2'
+const PREFIX = `aidi-outbox-${queueVersion}:`
 let timer: ReturnType<typeof setInterval> | null = null
 let flushing = false
 
-interface TelemetrySession { token: string; expiresAt: number; userId: string }
+interface TelemetrySession { token: string; expiresAt: number; userId: string; collector?: string }
 async function telemetrySession(): Promise<TelemetrySession | null> {
   try {
     if ('__TAURI_INTERNALS__' in window) {
       const { invoke } = await import('@tauri-apps/api/core')
-      const result = await invoke<TelemetrySession | null>('get_telemetry_session')
-      if (result?.token && result.expiresAt > Date.now()) return result
+      const result = await invoke<TelemetrySession | null>('get_telemetry_session', { collector: BASE })
+      if (result?.token && result.expiresAt > Date.now() && (!useFaidi || result.collector === FAIDI_ORIGIN)) {
+        return result
+      }
     }
   } catch {}
   return null
@@ -123,10 +128,11 @@ async function flush() {
         }
         const response = await fetch(BASE + item.endpoint, {
           method: 'POST', headers, body: JSON.stringify(item.body),
+          redirect: useFaidi ? 'error' : undefined,
           signal: AbortSignal.timeout(10000),
         })
         if ([400, 404, 413, 422].includes(response.status)) {
-          localStorage.setItem('aidi-rejected-v2:' + key.slice(PREFIX.length), JSON.stringify({ ...item, status: response.status, rejectedAt: new Date().toISOString() }))
+          localStorage.setItem(`aidi-rejected-${queueVersion}:` + key.slice(PREFIX.length), JSON.stringify({ ...item, status: response.status, rejectedAt: new Date().toISOString() }))
           localStorage.removeItem(key)
           console.warn('[tracker] 无法接收的记录已单独保留', response.status)
           continue
