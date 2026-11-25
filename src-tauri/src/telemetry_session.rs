@@ -39,7 +39,7 @@ fn backend_url() -> Option<reqwest::Url> {
     let host = url.host_str()?;
     let allowed = match url.scheme() {
         "https" => matches!(host, "aidi.yadea.com.cn" | "microsapptest.yadea.com.cn") && url.port().is_none(),
-        "http" => matches!(host, "localhost" | "127.0.0.1") && url.port() == Some(46291),
+        "http" => matches!(host, "localhost" | "127.0.0.1") && url.port() == Some(1367),
         _ => false,
     };
     if !allowed || !url.username().is_empty() || url.password().is_some() {
