@@ -107,6 +107,11 @@ mod hotkey {
     }
 
     fn toggle_ball(app: &AppHandle) {
+        if !IS_LOGGED_IN.load(Ordering::SeqCst) {
+            let app = app.clone();
+            tauri::async_runtime::spawn(show_login_window(app));
+            return;
+        }
         if let Some(window) = app.webview_windows().get("main") {
             let visible = BALL_VISIBLE.load(Ordering::SeqCst);
             if visible {
@@ -1146,6 +1151,9 @@ fn animate_to_position(
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, window: tauri::Window) {
+    if !IS_LOGGED_IN.load(Ordering::SeqCst) {
+        return;
+    }
     // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
     let was_flipped = INPUT_EXPANDED_FLIPPED.swap(false, Ordering::SeqCst);
     if was_flipped {
@@ -1250,6 +1258,10 @@ fn hide_menu_window(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn show_optimizer_window(app: tauri::AppHandle) {
+    if !IS_LOGGED_IN.load(Ordering::SeqCst) {
+        tauri::async_runtime::spawn(show_login_window(app));
+        return;
+    }
     // 先隐藏菜单（与 Electron 版本一致）
     let windows = app.webview_windows();
     if let Some(menu_window) = windows.get("menu") {
@@ -2238,20 +2250,26 @@ static CHAT_WINDOW_CREATING: AtomicBool = AtomicBool::new(false);
 
 /// 创建聊天气泡窗口
 fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>, enable_wiki_search: bool) -> Result<tauri::WebviewWindow, tauri::Error> {
+    let login = get_login_info().ok().flatten().ok_or(tauri::Error::WindowNotFound)?;
+    let user_id = ["fsUserId", "id"].into_iter()
+        .filter_map(|field| login["user"][field].as_str().map(str::trim))
+        .find(|id| !id.is_empty())
+        .ok_or(tauri::Error::WindowNotFound)?;
     // 检查是否正在创建中
     if CHAT_WINDOW_CREATING.load(Ordering::SeqCst) {
         return Err(tauri::Error::WindowNotFound);
     }
 
     CHAT_WINDOW_CREATING.store(true, Ordering::SeqCst);
-    // 构建聊天 URL，如果有初始消息则通过 query 参数传递
+    // 登录资料在主窗口和聊天窗口的来源可能不同，通过已有的 userId 参数传递当前身份。
     let base_url = get_external_url_base(app);
+    let user_id = urlencoding::encode(user_id);
     let chat_url_str = match initial_message {
         Some(msg) => {
             let encoded = urlencoding::encode(msg);
-            format!("{}/#/chat?message={}&enable_wiki_search={}", base_url, encoded, enable_wiki_search)
+            format!("{}/#/chat?userId={}&message={}&enable_wiki_search={}", base_url, user_id, encoded, enable_wiki_search)
         }
-        None => format!("{}/#/chat", base_url)
+        None => format!("{}/#/chat?userId={}", base_url, user_id)
     };
     // 先用 about:blank 创建窗口，避免 build() 阻塞
     let blank_url = tauri::WebviewUrl::External(tauri::Url::parse("about:blank").unwrap());
@@ -2357,6 +2375,12 @@ fn create_chat_window(app: &tauri::AppHandle, initial_message: Option<&str>, ena
 #[tauri::command]
 async fn show_chat_window(app: tauri::AppHandle, initial_message: Option<String>, visible: Option<bool>, enable_wiki_search: Option<bool>) {
     let should_show = visible.unwrap_or(true);
+    if !IS_LOGGED_IN.load(Ordering::SeqCst) {
+        if should_show || initial_message.is_some() {
+            show_login_window(app).await;
+        }
+        return;
+    }
     let wiki_enabled = enable_wiki_search.unwrap_or(false);
     // 如果窗口已存在，显示并更新位置
     if let Some(chat_window) = app.webview_windows().get("chat") {
@@ -2537,6 +2561,9 @@ fn update_chat_window_position_with_height(app: &tauri::AppHandle, override_ball
 
 /// 登录成功后的处理逻辑（从 on_login_success 抽取出来供 on_navigation 调用）
 fn handle_login_success(app: &tauri::AppHandle) {
+    if !matches!(get_login_info(), Ok(Some(_))) {
+        return;
+    }
     // 更新登录状态
     IS_LOGGED_IN.store(true, Ordering::SeqCst);
 
@@ -4161,13 +4188,15 @@ fn close_login_window(app: tauri::AppHandle) {
 /// 更新登录状态并重建托盘菜单
 /// 前端登录成功后调用此命令同步状态
 #[tauri::command]
-fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) {
+fn update_login_status(app: tauri::AppHandle, is_logged_in: bool) -> bool {
+    let is_logged_in = is_logged_in && matches!(get_login_info(), Ok(Some(_)));
     IS_LOGGED_IN.store(is_logged_in, Ordering::SeqCst);
 
     // 直接读 BALL_VISIBLE，避免 is_visible() 与 BALL_VISIBLE 状态不一致
     let ball_visible = BALL_VISIBLE.load(Ordering::SeqCst);
 
     rebuild_tray_menu(&app, is_logged_in, ball_visible);
+    is_logged_in
 }
 
 /// 登录成功后由 login 窗口调用
@@ -4234,8 +4263,16 @@ fn get_login_info() -> Result<Option<serde_json::Value>, String> {
         let auth_file = data_dir.join("AIDI Desktop").join("auth.json");
         if auth_file.exists() {
             if let Ok(content) = std::fs::read_to_string(&auth_file) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    return Ok(Some(json));
+                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(user) = json["user"].as_str() {
+                        json["user"] = serde_json::from_str(user).unwrap_or_default();
+                    }
+                    let user = &json["user"];
+                    if ["id", "fsUserId"].iter().any(|key| {
+                        user[*key].as_str().is_some_and(|id| !id.trim().is_empty())
+                    }) {
+                        return Ok(Some(json));
+                    }
                 }
             }
         }
@@ -4272,6 +4309,15 @@ fn clear_login_state(app: tauri::AppHandle) -> Result<(), String> {
 
     // 3. 重置全局登录状态
     IS_LOGGED_IN.store(false, Ordering::SeqCst);
+    BALL_VISIBLE.store(false, Ordering::SeqCst);
+    if let Some(chat) = app.get_webview_window("chat") {
+        let _ = chat.destroy();
+    }
+    for label in ["main", "optimizer", "menu", "submenu", "panel"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.hide();
+        }
+    }
 
     // 4. 清除上报线程的用户信息
     report_worker::set_user_info(String::new(), String::new());
@@ -4295,6 +4341,11 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if !IS_LOGGED_IN.load(Ordering::SeqCst) {
+                let app = app.clone();
+                tauri::async_runtime::spawn(show_login_window(app));
+                return;
+            }
             // 第二个实例启动时，把已有主窗口显示并聚焦
             if let Some(window) = app.webview_windows().get("main") {
                 // 如果展开输入框时窗口被左移（翻转到右侧布局），先恢复原始位置
@@ -4511,17 +4562,9 @@ pub fn run() {
                 // 提前从 auth.json 读取登录状态
                 // 使 IS_LOGGED_IN 在前端 WebView 加载之前就已正确设置
                 {
-                    let has_valid_token = dirs::data_local_dir()
-                        .map(|d| d.join("AIDI Desktop").join("auth.json"))
-                        .and_then(|p| std::fs::read_to_string(p).ok())
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                        .map(|v| !v["token"].as_str().unwrap_or("").is_empty())
-                        .unwrap_or(false);
-
-                    if has_valid_token {
+                    if matches!(get_login_info(), Ok(Some(_))) {
                         IS_LOGGED_IN.store(true, Ordering::SeqCst);
                         rebuild_tray_menu(&app.handle(), true, false);
-                    } else {
                     }
                 }
 
