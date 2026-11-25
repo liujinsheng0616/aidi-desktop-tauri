@@ -98,7 +98,9 @@ pub fn get_telemetry_session(window: tauri::WebviewWindow) -> Option<TelemetrySe
     let host = url.host_str()?;
     let trusted = match (url.scheme(), host) {
         ("https", "aidi.yadea.com.cn" | "microsapptest.yadea.com.cn") => url.port().is_none(),
-        ("http", "localhost" | "127.0.0.1") => url.port() == Some(5173),
+        ("http", "localhost" | "127.0.0.1") => {
+            url.port() == Some(5173) || (cfg!(debug_assertions) && url.port() == Some(1420))
+        }
         ("tauri", "localhost") | ("http" | "https", "tauri.localhost") => true,
         _ => false,
     };
