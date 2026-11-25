@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import type { DiskDetails } from '@/stores/optimizer'
@@ -44,9 +44,6 @@ const isWin = navigator.platform.toLowerCase().includes('win')
 // Categories that require admin privileges on Windows
 const ELEVATED_CATEGORIES = ['systemTemp', 'prefetch']
 
-// Note: Tauri doesn't need macOS Full Disk Access for these operations
-// The native Rust implementation handles permissions differently than Electron
-
 // Check if a category requires admin on Windows
 function needsAdminOnWindows(key: string): boolean {
   return isWin && ELEVATED_CATEGORIES.includes(key)
@@ -60,7 +57,7 @@ function showTooltip(event: MouseEvent, cat: { key: string; tip: string }) {
   const rect = target.getBoundingClientRect()
   activeTooltip.value = {
     key: cat.key,
-    tip: cat.tip,
+    tip: categoryUnavailable(cat.key) ? '无法统计废纸篓。请检查 macOS「隐私与安全性」中 AIDI 的 Finder 自动化权限，或在 Finder 中查看。' : cat.tip,
     x: rect.left,
     y: rect.top - 8
   }
@@ -88,6 +85,14 @@ const selectedCategories = computed(() => {
 function toggleCategory(key: string, checked: boolean) {
   toggleDiskCategory(key, checked)
 }
+
+function categoryUnavailable(key: string): boolean {
+  return isMac && key === 'recycleBin' && props.details.categories.recycleBin?.needsAuth === true
+}
+
+watch(() => categoryUnavailable('recycleBin'), unavailable => {
+  if (unavailable) toggleDiskCategory('recycleBin', false)
+}, { immediate: true })
 
 const categories = computed(() => isMac ? [
   { key: 'temp', label: '临时文件', icon: '📁', tip: '系统和应用产生的临时文件，清理后自动重建' },
@@ -212,12 +217,13 @@ async function handleClean() {
           </span>
         </span>
         <div class="flex items-center gap-2">
-          <span class="text-muted-foreground">
+          <span v-if="categoryUnavailable(cat.key)" class="text-muted-foreground">无法读取</span>
+          <span v-else class="text-muted-foreground">
             {{ formatSize((details.categories as any)[cat.key]?.size || 0) }}
           </span>
           <Switch
             :model-value="selectedCategories[cat.key]"
-            :disabled="isCleaning"
+            :disabled="isCleaning || categoryUnavailable(cat.key)"
             @update:model-value="toggleCategory(cat.key, $event as boolean)"
             class="scale-75"
           />

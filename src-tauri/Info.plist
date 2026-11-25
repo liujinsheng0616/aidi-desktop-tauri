@@ -4,5 +4,7 @@
 <dict>
     <key>NSScreenCaptureUsageDescription</key>
     <string>AIDI Desktop 需要屏幕录制权限来截取屏幕画面，用于 AI 辅助问答。</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>AIDI Desktop 通过 Finder 统计废纸篓的占用空间，并在你确认后清空废纸篓。</string>
 </dict>
 </plist>
