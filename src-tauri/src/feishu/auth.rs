@@ -80,6 +80,7 @@ pub async fn login(code: &str) -> Result<UserInfoData, String> {
 
     // Step 2: 获取用户信息
     let user_info = get_user_info(&access_token).await?;
+    crate::telemetry_session::establish(access_token, user_info.employee_no.as_deref()).await;
 
     Ok(user_info)
 }

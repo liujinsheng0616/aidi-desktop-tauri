@@ -4,6 +4,7 @@
 #![allow(deprecated)]
 
 mod report_worker;
+mod telemetry_session;
 mod feishu;
 #[cfg(any(target_os = "windows", test))]
 mod installer_catalog;
@@ -4251,6 +4252,7 @@ fn log_debug(_message: String) {
 /// 清除登录状态（删除 auth.json + 重置全局状态）
 #[tauri::command]
 fn clear_login_state(app: tauri::AppHandle) -> Result<(), String> {
+    telemetry_session::invalidate();
     // 1. 删除 auth.json 文件
     if let Some(data_dir) = dirs::data_local_dir() {
         let auth_file = data_dir.join("AIDI Desktop").join("auth.json");
@@ -4730,6 +4732,7 @@ pub fn run() {
             resize_chat_window,
             reset_chat_window_size,
             feishu::auth::feishu_login,
+            telemetry_session::get_telemetry_session,
             feishu::bitable::feishu_report_device,
             check_update,
             download_and_install_update,

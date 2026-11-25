@@ -66,15 +66,34 @@ const BASE = import.meta.env.VITE_TRACKER_BASE_URL || 'http://localhost:46291'
 const PREFIX = 'aidi-outbox-v2:'
 let timer: ReturnType<typeof setInterval> | null = null
 let flushing = false
+
+interface TelemetrySession { token: string; expiresAt: number; userId: string }
+async function telemetrySession(): Promise<TelemetrySession | null> {
+  try {
+    if ('__TAURI_INTERNALS__' in window) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const result = await invoke<TelemetrySession | null>('get_telemetry_session')
+      if (result?.token && result.expiresAt > Date.now()) return result
+    }
+  } catch {}
+  return null
+}
+
+function getAnonymousTrackingId() {
+  let id = localStorage.getItem('aidi-anonymous-user-id')
+  if (!id) {
+    id = 'anonymous-' + crypto.randomUUID()
+    localStorage.setItem('aidi-anonymous-user-id', id)
+  }
+  return id
+}
 export function getTrackingUserId(): string {
   try {
     const url = new URLSearchParams(location.hash.split('?')[1] || '').get('userId')
     if (url) return url
     const u = JSON.parse(localStorage.getItem('aidi-user') || '{}')
     if (u.fsUserId || u.id) return String(u.fsUserId || u.id)
-    let id = localStorage.getItem('aidi-anonymous-user-id')
-    if (!id) { id = 'anonymous-' + crypto.randomUUID(); localStorage.setItem('aidi-anonymous-user-id', id) }
-    return id
+    return getAnonymousTrackingId()
   } catch { return 'anonymous-session' }
 }
 function platform() { return /Windows/i.test(navigator.userAgent) ? 'win' : /Mac/i.test(navigator.userAgent) ? 'mac' : 'unknown' }
@@ -84,6 +103,7 @@ async function flush() {
   try {
     const keys = Object.keys(localStorage).filter(k => k.startsWith(PREFIX)).sort()
     let attempted = 0
+    let identity: Promise<TelemetrySession | null> | undefined
     for (const key of keys) {
       const text = localStorage.getItem(key)
       if (!text) continue
@@ -92,8 +112,17 @@ async function flush() {
         if (item.nextAttemptAt && item.nextAttemptAt > Date.now()) continue
         if (attempted >= 50) break
         attempted++
+        const reportedUser = item.body.events?.[0]?.userId ?? item.body.userId
+        if (typeof reportedUser === 'string' && !reportedUser.startsWith('anonymous-')) identity ??= telemetrySession()
+        const session = identity ? await identity : null
+        const credential = session?.userId === reportedUser ? session?.token : undefined
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-AIDI-Anonymous-Id': getAnonymousTrackingId(),
+          ...(credential ? { Authorization: 'Bearer ' + credential } : {}),
+        }
         const response = await fetch(BASE + item.endpoint, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item.body),
+          method: 'POST', headers, body: JSON.stringify(item.body),
           signal: AbortSignal.timeout(10000),
         })
         if ([400, 404, 413, 422].includes(response.status)) {
