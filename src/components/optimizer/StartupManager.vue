@@ -11,10 +11,12 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const { toggleStartup, refreshStartup, toggleStartupItemSelection, isStartupItemSelected, optimizeSelections } = useOptimizer()
+const { toggleStartup, refreshStartup, toggleStartupItemSelection, isStartupItemSelected, optimizeSelections, isOperating } = useOptimizer()
 
 const isOptimizing = ref(false)
 const showConfirm = ref(false)
+const notice = ref('')
+const failures = ref<string[]>([])
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
 
@@ -29,11 +31,7 @@ const adminOnlySources = isMac
 const editableItems = computed(() =>
   props.details.items.filter(item => !adminOnlySources.includes(item.source))
 )
-
-// Only show enabled items that can be disabled for optimization
-const optimizableItems = computed(() =>
-  editableItems.value.filter(item => item.enabled)
-)
+const restorableSources = isMac ? ['LaunchAgents'] : ['HKCU_Run', 'StartupFolder']
 
 // Check if an item is selected for optimization
 function isSelected(item: StartupItem): boolean {
@@ -50,24 +48,37 @@ const selectedCount = computed(() => optimizeSelections.startup.items.length)
 
 const hasSelection = computed(() => selectedCount.value > 0)
 
-// Optimize selected items (disable them)
-async function handleOptimize() {
-  if (!hasSelection.value) return
+async function updateStartupItems(items: StartupItem[], enabled: boolean) {
+  if (!items.length || isOperating.value) return
 
-  isOptimizing.value = true
+  isOptimizing.value = !enabled
+  isOperating.value = true
+  notice.value = ''
+  failures.value = []
   try {
-    const itemsToDisable = [...optimizeSelections.startup.items]
-    for (const item of itemsToDisable) {
-      await toggleStartup(item, false)
+    let updated = 0
+    for (const item of items) {
+      try {
+        const result = await toggleStartup(item, enabled)
+        if (result?.success === true) {
+          updated++
+        } else {
+          failures.value.push(`${item.name}：${result?.message || (enabled ? '恢复自启失败' : '禁用失败')}`)
+        }
+      } catch (error) {
+        failures.value.push(`${item.name}：${String(error)}`)
+      }
     }
-    // Clear selections
-    optimizeSelections.startup.items = []
-    // Refresh data
-    await refreshStartup()
-  } catch (e) {
-    // 优化失败，忽略
+    if (updated > 0) {
+      notice.value = enabled ? `已恢复 ${items[0].name} 的登录自启` : `已禁用 ${updated} 个启动项`
+    }
+    const scan = await refreshStartup()
+    if (scan.status === 'error') failures.value.push(scan.summary)
+  } catch {
+    failures.value.push('无法刷新启动项状态，请重新扫描')
   } finally {
     isOptimizing.value = false
+    isOperating.value = false
   }
 }
 
@@ -97,8 +108,8 @@ function getSourceLabel(source: string) {
     <!-- Optimizable items list -->
     <div class="space-y-1">
       <div
-        v-for="item in optimizableItems"
-        :key="item.name + item.source"
+        v-for="item in editableItems"
+        :key="item.source === 'StartupFolder' ? item.command : item.source + ':' + item.name"
         class="startup-item flex items-center justify-between text-xs p-1.5 rounded transition-colors cursor-default"
       >
         <span class="flex items-center gap-2 flex-1 min-w-0">
@@ -107,23 +118,45 @@ function getSourceLabel(source: string) {
         </span>
         <div class="flex items-center gap-2">
           <span class="text-muted-foreground">{{ getSourceLabel(item.source) }}</span>
+          <template v-if="!item.enabled">
+            <span class="whitespace-nowrap text-muted-foreground">已禁用</span>
+            <Button
+              v-if="restorableSources.includes(item.source)"
+              variant="outline"
+              size="sm"
+              class="h-6 whitespace-nowrap px-2 text-xs"
+              :disabled="isOperating"
+              :aria-label="`恢复 ${item.name} 的登录自启`"
+              @click="updateStartupItems([item], true)"
+            >恢复自启</Button>
+          </template>
           <Switch
+            v-else-if="restorableSources.includes(item.source)"
             :model-value="isSelected(item)"
-            :disabled="isOptimizing"
+            :disabled="isOperating"
+            :aria-label="`选择禁用 ${item.name}`"
             @update:model-value="handleSelectForOptimize(item, $event as boolean)"
             class="scale-75"
           />
+          <span v-else class="whitespace-nowrap text-muted-foreground">在系统设置中管理</span>
         </div>
       </div>
 
-      <div v-if="optimizableItems.length === 0" class="text-xs text-muted-foreground p-2 text-center">
+      <div v-if="editableItems.length === 0" class="text-xs text-muted-foreground p-2 text-center">
         没有可优化的启动项
       </div>
     </div>
 
+    <p v-if="notice" role="status" class="break-words text-xs text-green-700 dark:text-green-400">
+      {{ notice }}
+    </p>
+    <ul v-if="failures.length" role="alert" class="space-y-1 break-words text-xs text-red-600 dark:text-red-400">
+      <li v-for="(failure, index) in failures" :key="index">{{ failure }}</li>
+    </ul>
+
     <div class="flex items-center justify-between pt-2 border-t">
       <span class="text-sm font-medium">已选: {{ selectedCount }} 项</span>
-      <Button size="sm" :disabled="isOptimizing || !hasSelection" @click="showConfirm = true">
+      <Button size="sm" :disabled="isOperating || !hasSelection" @click="showConfirm = true">
         {{ isOptimizing ? '优化中...' : '优化所选' }}
       </Button>
     </div>
@@ -139,7 +172,7 @@ function getSourceLabel(source: string) {
           </div>
           <div class="confirm-actions">
             <Button variant="outline" size="sm" @click="showConfirm = false">取消</Button>
-            <Button size="sm" @click="handleOptimize(); showConfirm = false">确认优化</Button>
+            <Button size="sm" @click="updateStartupItems([...optimizeSelections.startup.items], false); showConfirm = false">确认优化</Button>
           </div>
         </div>
       </div>

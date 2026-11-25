@@ -88,6 +88,7 @@ async function onSettingsUpdated(event: any) {
 }
 
 async function handleQuickOptimize() {
+  if (isOperating.value || isScanning.value) return
   if (!hasSelections.value) {
     showToast('请先勾选要优化的项目')
     return
@@ -110,15 +111,16 @@ async function handleQuickOptimize() {
       parts.push(`禁用 ${result.startupDisabled} 个启动项`)
     }
 
-    optimizeResultSummary.value = parts.length > 0 ? parts.join('，') : '优化完成'
-    showOptimizeSuccess.value = true
-
-    // Show success state for 2 seconds before rescanning
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    showOptimizeSuccess.value = false
-
-    // Now rescan
+    if (result.success) {
+      optimizeResultSummary.value = parts.join('，')
+      showOptimizeSuccess.value = true
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      showOptimizeSuccess.value = false
+    }
     await scanAll()
+    if (!result.success) {
+      showToast(parts.length ? `部分优化未完成，已${parts.join('，已')}` : '本次优化未全部完成，请检查各项结果')
+    }
   } catch (e) {
     showToast('优化失败，请重试')
   } finally {
@@ -131,7 +133,9 @@ onMounted(async () => {
   applyTheme()
   scanAll()
   unlistenSettings = await listen('settings-updated', onSettingsUpdated)
-  unlistenShown = await listen('optimizer-shown', () => scanAll())
+  unlistenShown = await listen('optimizer-shown', () => {
+    if (!isOperating.value) void scanAll()
+  })
 })
 
 onUnmounted(() => {
@@ -195,7 +199,7 @@ onUnmounted(() => {
             :summary="startupResult.summary"
             v-model:open="openCards.startup"
           >
-            <StartupManager v-if="startupResult.details" :details="startupResult.details" />
+            <StartupManager v-if="Array.isArray(startupResult.details?.items)" :details="startupResult.details" />
           </StatusCard>
 
           <!-- Disk Health -->

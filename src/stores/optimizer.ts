@@ -193,6 +193,7 @@ const hasIssues = computed(() => {
 
 // Actions
 async function scanAll() {
+  if (isScanning.value) return
   isScanning.value = true
   scanProgress.value = 5  // Start at 5% immediately to show activity
   scanStatus.value = '正在扫描...'
@@ -229,7 +230,7 @@ async function scanAll() {
       } catch (e: any) {
         completed++
         scanProgress.value = 5 + Math.round((completed / total) * 90)
-        return { dimension: step.key as any, status: 'error' as Status, summary: e.message, details: {} }
+        return { dimension: step.key as any, status: 'error' as Status, summary: e?.message || String(e), details: {} }
       }
     })
 
@@ -245,6 +246,7 @@ async function scanAll() {
     scanProgress.value = 100
     scanStatus.value = '扫描完成'
     results.value = scanResults
+    syncStartupSelections(startupResult.value)
     lastScanTime.value = new Date().toLocaleString()
 
     // 上报设备信息（不阻断扫描流程）
@@ -282,8 +284,8 @@ function optimizationIdentity() {
 async function runOptimization(command: string, args: Record<string, unknown> | undefined, optType: string, detail: (result: any) => Record<string, unknown>) {
   try {
     const result: any = await invoke(command, args)
-    const success = result?.success !== false && !(result?.failedCount > 0)
-    trackOptimization({ ...optimizationIdentity(), optType, optDetail: JSON.stringify(detail(result)), success, errorMessage: success ? undefined : result?.errorReason || '操作部分或全部失败' })
+    const success = (optType === 'startup_toggle' ? result?.success === true : result?.success !== false) && !(result?.failedCount > 0)
+    trackOptimization({ ...optimizationIdentity(), optType, optDetail: JSON.stringify(detail(result)), success, errorMessage: success ? undefined : result?.errorReason || result?.message || '操作部分或全部失败' })
     return result
   } catch (error) {
     trackOptimization({ ...optimizationIdentity(), optType, success: false, errorMessage: String(error) })
@@ -297,7 +299,17 @@ async function optimizeMemory() {
   return runOptimization('optimizer_memory_optimize', undefined, 'memory_optimize', r => ({ freedMB: r?.freedMB ?? (r?.freedBytes || 0) / 1024 / 1024, processesOptimized: r?.processesOptimized }))
 }
 async function toggleStartup(item: StartupItem, enabled: boolean) {
-  return runOptimization('optimizer_startup_toggle', { itemJson: JSON.stringify({ ...item, enabled }) }, 'startup_toggle', () => ({ name: item.name, enabled, startupDisabled: enabled ? 0 : 1 }))
+  const result = await runOptimization('optimizer_startup_toggle', { itemJson: JSON.stringify({ ...item, enabled }) }, 'startup_toggle', result => ({
+    name: item.name,
+    enabled,
+    startupDisabled: !enabled && result?.success === true ? 1 : 0,
+  }))
+  if (result?.success === true) {
+    const current = startupResult.value?.details?.items?.find((candidate: StartupItem) => sameStartupItem(candidate, item))
+    if (current) current.enabled = enabled
+    toggleStartupItemSelection(item, false)
+  }
+  return result
 }
 
 async function refreshDisk() {
@@ -321,9 +333,10 @@ async function refreshMemory() {
 async function refreshStartup() {
   const result = await invoke<ScanResult>('optimizer_startup_list')
   const idx = results.value.findIndex(r => r.dimension === 'startup')
-  if (idx >= 0) {
+  if (idx >= 0 && result.status !== 'error') {
     results.value[idx] = result
   }
+  syncStartupSelections(result)
   return result
 }
 
@@ -362,17 +375,27 @@ async function quickOptimize() {
   }
 
   // Disable selected startup items
-  if (optimizeSelections.startup.items.length > 0) {
-    for (const item of optimizeSelections.startup.items) {
-      tasks.push(toggleStartup(item, false).then(r => { if (r?.success !== false) result.startupDisabled++; else result.success = false }))
-    }
+  const startupItems = [...optimizeSelections.startup.items]
+  const operationCount = tasks.length + startupItems.length
+  if (startupItems.length > 0) {
+    tasks.push((async () => {
+      for (const item of startupItems) {
+        try {
+          const outcome = await toggleStartup(item, false)
+          if (outcome?.success === true) result.startupDisabled++
+          else result.success = false
+        } catch {
+          result.success = false
+        }
+      }
+    })())
   }
 
   // 等待所有结果，部分失败也保留已经成功的操作记录。
   const settled = await Promise.allSettled(tasks)
   result.success = result.success && settled.every(r => r.status === 'fulfilled')
   lastOptimizeResult.value = result
-  trackOptimization({ ...optimizationIdentity(), optType: 'quick_optimize', optDetail: JSON.stringify({ ...result, operationCount: tasks.length }), success: result.success, errorMessage: result.success ? undefined : '部分优化未完成，请查看单项记录' })
+  trackOptimization({ ...optimizationIdentity(), optType: 'quick_optimize', optDetail: JSON.stringify({ ...result, operationCount }), success: result.success, errorMessage: result.success ? undefined : '部分优化未完成，请查看单项记录' })
 
   // Clear selections after completion
   optimizeSelections.disk.categories = []
@@ -405,12 +428,21 @@ function setMemoryOptimizeEnabled(enabled: boolean) {
   optimizeSelections.memory.enabled = enabled
 }
 
+function sameStartupItem(candidate: StartupItem, item: StartupItem) {
+  return candidate.source === item.source && (item.source === 'StartupFolder'
+    ? candidate.command === item.command
+    : candidate.name === item.name)
+}
+
+function syncStartupSelections(scan?: ScanResult) {
+  const items: StartupItem[] = scan?.status !== 'error' && Array.isArray(scan?.details?.items) ? scan.details.items : []
+  optimizeSelections.startup.items = items.filter(item => item.enabled && isStartupItemSelected(item))
+}
+
 function toggleStartupItemSelection(item: StartupItem, selected: boolean) {
-  const idx = optimizeSelections.startup.items.findIndex(
-    i => i.name === item.name && i.source === item.source
-  )
+  const idx = optimizeSelections.startup.items.findIndex(candidate => sameStartupItem(candidate, item))
   if (selected) {
-    if (idx < 0) {
+    if (item.enabled && idx < 0) {
       optimizeSelections.startup.items.push(item)
     }
   } else {
@@ -421,9 +453,7 @@ function toggleStartupItemSelection(item: StartupItem, selected: boolean) {
 }
 
 function isStartupItemSelected(item: StartupItem): boolean {
-  return optimizeSelections.startup.items.some(
-    i => i.name === item.name && i.source === item.source
-  )
+  return optimizeSelections.startup.items.some(candidate => sameStartupItem(candidate, item))
 }
 
 // 上报设备信息到 aigc-server（忽略错误，不阻断扫描流程）
